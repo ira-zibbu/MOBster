@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mobster"
+version = "0.1.0"
+description = "Detect transposition of mobile genetic elements in bacterial genomes"
+authors = [{ name = "Ira Zibbu" }]
+requires-python = ">=3.10"
+# Non-Python tools (ISEScan 1.7.3, minimap2) come from environment.yml.
+dependencies = ["pysam>=0.22", "biopython>=1.84", "pandas>=2.0", "coloredlogs"]
+
+[project.scripts]
+mobster = "MOBster.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+MOBster = ["viz/template.html", "viz/vendor/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["test"]

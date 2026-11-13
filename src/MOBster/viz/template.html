@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__</title>
+<!--
+  Self-contained MOBster map. Renders offline: all data and libraries are inlined.
+  Bundled libraries:
+    D3 7.9.0 (ISC licence, https://d3js.org)
+    CircosJS 2.1.0 (GPL-2.0 licence; source: npm package "circos@2.1.0",
+                    https://github.com/nicgirault/circosJS)
+-->
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #57606a; --rule: #d0d7de; --panel: #f6f8fa;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  header { padding: 16px 20px 10px; border-bottom: 1px solid var(--rule); }
+  h1 { font-size: 18px; margin: 0 0 6px; font-weight: 600; }
+  .prov { color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 18px; }
+  .prov b { color: var(--fg); font-weight: 600; }
+  main { display: flex; flex-wrap: wrap; gap: 8px 24px; padding: 12px 20px; align-items: flex-start; }
+  #chart { flex: 0 1 auto; max-width: 100%; }
+  #chart svg { max-width: 100%; height: auto; display: block; }
+  aside { flex: 0 0 260px; }
+  .legend { list-style: none; margin: 0; padding: 0; }
+  .legend li { display: flex; align-items: center; gap: 10px; padding: 5px 0; }
+  .legend svg { flex: none; }
+  .legend .n { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .note { color: var(--muted); font-size: 12.5px; margin-top: 14px; }
+  .note p { margin: 0 0 8px; }
+  /* CircosJS tooltip (it creates div.circos-tooltip on <body>) */
+  div.circos-tooltip {
+    text-align: left !important; background: #1f2328 !important; color: #fff !important;
+    padding: 8px 10px !important; border-radius: 4px; font-size: 12.5px; line-height: 1.35;
+    max-width: 340px;
+  }
+  .tip table { border-collapse: collapse; }
+  .tip td { padding: 0 8px 0 0; vertical-align: top; }
+  .tip td:first-child { color: #9da5ae; white-space: nowrap; }
+  .tip td:last-child { font-variant-numeric: tabular-nums; word-break: break-all; }
+  .tip .moved { color: #9da5ae; font-size: 11.5px; margin-top: 4px; }
+  /* ring glyphs */
+  .ring-AMB path.point { stroke: transparent; stroke-width: 6px; pointer-events: all; }
+  path.point { cursor: default; }
+  path.point:hover { filter: brightness(0.75); }
+</style>
+</head>
+<body>
+<header>
+  <h1>MOBster: IS element calls</h1>
+  <div class="prov">
+    <span>Query <b>__QUERY__</b></span>
+    <span>Reference <b>__REFERENCE__</b></span>
+    <span>MOBster <b>v__VERSION__</b></span>
+  </div>
+</header>
+<main>
+  <div id="chart"></div>
+  <aside>
+    <ul class="legend" id="legend"></ul>
+    <div class="note">
+      <p>Each element is drawn once, on the ring for its call, at its position in the
+        <b>query</b>. Arcs are query records, in FASTA order, sized by length.</p>
+      <p>Hover a glyph for its family, cluster, status and evidence
+        (<code>midpoint_gap</code>, <code>anc_residual</code>, <code>tsd_estimate</code>).</p>
+      <p>Glyphs closer together than they can be hovered are spread slightly along the
+        ring; tooltips always show the true coordinates.</p>
+    </div>
+  </aside>
+</main>
+
+<script>/*__D3_JS__*/</script>
+<script>/*__CIRCOS_JS__*/</script>
+<script id="mobster-data" type="application/json">/*__DATA_JSON__*/</script>
+<script>
+(function () {
+  "use strict";
+  var data = JSON.parse(document.getElementById("mobster-data").textContent);
+  var g = data.geometry, rings = data.rings;
+  var ORDER = ["NEW", "ANC", "AMB"];   // outermost inward
+  var TICK_PATH = "M-1,-5h2v10h-2z";   // vertical bar; CircosJS rotates glyphs by theta, so this points radially
+
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, function (c) {
+      return {"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c];
+    });
+  }
+
+  function tooltip(d) {
+    var rows = d.tip.map(function (kv) {
+      return "<tr><td>" + esc(kv[0]) + "</td><td>" + esc(kv[1]) + "</td></tr>";
+    }).join("");
+    var moved = Math.abs(d.pos - d.true_pos) >= 1
+      ? '<div class="moved">drawn ' + Math.round(Math.abs(d.pos - d.true_pos)).toLocaleString() +
+        " bp from its true position to keep it hoverable</div>"
+      : "";
+    return '<div class="tip"><table>' + rows + "</table>" + moved + "</div>";
+  }
+
+  // ---- legend (static, §4/§8: no interactivity in this version)
+  var legend = d3.select("#legend");
+  ORDER.forEach(function (k) {
+    var r = rings[k], li = legend.append("li");
+    var sw = li.append("svg").attr("width", 16).attr("height", 16)
+      .append("g").attr("transform", "translate(8,8)");
+    if (r.shape === "tick") {
+      sw.append("path").attr("d", TICK_PATH).attr("fill", r.color);
+    } else {
+      sw.append("circle").attr("r", Math.sqrt(r.size / Math.PI)).attr("fill", r.color);
+    }
+    li.append("span").text(r.label);
+    li.append("span").attr("class", "n").text(data.meta.counts[k]);
+  });
+
+  // ---- circos layout: one arc per query record
+  var circos = new Circos({container: "#chart", width: g.size, height: g.size});
+  circos.layout(
+    data.records.map(function (r) { return {id: r.id, len: r.len, label: r.name, color: "#d0d7de"}; }),
+    {
+      innerRadius: g.layout_inner, outerRadius: g.layout_outer, gap: g.gap, cornerRadius: 2,
+      // record names only for multi-record queries (redundant for one closed genome)
+      labels: {display: data.records.length > 1 && data.records.length <= 30, position: "center", size: 11,
+               color: "#57606a", radialOffset: 58},   // outside the tick labels
+      ticks: {display: true, color: "#8c959f", spacing: g.ticks.spacing, labels: true,
+              labelSpacing: 10, labelSuffix: g.ticks.suffix, labelDenominator: g.ticks.denominator,
+              labelDisplay0: true, labelSize: "10px", labelColor: "#57606a",
+              labelFont: "default", majorSpacing: 5, size: {minor: 2, major: 5}}
+    }
+  );
+
+  // ---- one scatter track per ring, fixed colour per ring (never per family, §4)
+  ORDER.forEach(function (k) {
+    var r = rings[k];
+    var pts = data.elements.filter(function (e) { return e.ring === k; }).map(function (e) {
+      return {block_id: e.block, position: e.pos, value: 0.5, i: e.i, ring: e.ring,
+              pos: e.pos, true_pos: e.true_pos, tip: e.tip};
+    });
+    circos.scatter("ring-" + k, pts, {
+      innerRadius: r.radius - 1, outerRadius: r.radius + 1, min: 0, max: 1,
+      color: r.color, strokeColor: r.color, strokeWidth: 0,
+      shape: r.shape === "tick" ? "square" : r.shape, size: r.size || 16,
+      tooltipContent: tooltip
+    });
+  });
+
+  circos.render();
+
+  // AMB: replace the placeholder symbol with a small radial tick (CircosJS has no tick shape)
+  d3.selectAll(".ring-AMB path.point").attr("d", TICK_PATH);
+  // test/inspection hooks
+  d3.selectAll("path.point").attr("data-i", function (d) { return d.i; })
+    .attr("data-ring", function (d) { return d.ring; });
+  window.MOBSTER_MAP = {data: data, rendered: true};
+})();
+</script>
+</body>
+</html>
