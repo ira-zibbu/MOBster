@@ -53,7 +53,8 @@ Every run also writes `mobster_map.html` (spec: `docs/viz_instructions.md`). It'
 self-contained file, around 570 KB, with the data and both libraries inlined, so it opens
 offline and can be emailed. One arc per query record, in FASTA order; NEW, ANC and AMB on
 separate rings, with one fixed colour per ring. Hovering a glyph shows its family, cluster,
-coordinates, status, `midpoint_gap`, `anc_residual` and `tsd_estimate`. Glyphs too close to
+coordinates, status, `midpoint_gap`, `anc_residual` and `tsd_estimate`,
+and marks partial elements. Glyphs too close to
 hover individually are spread slightly along their ring; the tooltip says when a glyph was
 moved and by how much.
 
@@ -95,16 +96,17 @@ texts are in `src/MOBster/viz/vendor/`.
    - **NEW**: `reference_position` is the insertion point (what the spec's
      `insertion_site` held); `reference_end` is empty.
 
-   Two limits on the ANC span:
-   - **Micro-homology:** where the bases at one end of the copy repeat just past the
-     other end, the aligner extends a flank record through them, so the span can be
-     trimmed by a few bp. In the tier 1 benchmark, all 383 ANC spans were exact or
-     trimmed by 1–3 bp, never extended.
-   - **Annotation error carries over:** the construct is defined by the query's
-     element boundaries, so a query boundary off by N bp moves the reference span by
-     the same N bp. The span is the query annotation translated into reference
-     coordinates, not an independent boundary estimate. In tier 2, the span offsets
-     equal ISEScan's boundary errors plus the micro-homology trim.
+   The ANC span comes from the separately aligned flanks that confirm the call
+   (deviation 10). It is not taken from the construct's records: where the bases at one
+   end of the copy repeat just past the other end, the aligner extends a construct
+   record through them and trims the span by 1–3 bp, which a separately aligned flank
+   cannot do. In tier 1, all 390 ANC spans are exact (from the construct records: 181).
+
+   Limit: **annotation error carries over.** The flanks are defined by the query's
+   element boundaries, so a query boundary off by N bp moves the reference span by the
+   same N bp. The span is the query annotation translated into reference coordinates,
+   not an independent boundary estimate. In tier 2, the span offsets equal ISEScan's
+   boundary errors exactly (374/374).
 7. **Only the query is annotated** (spec §4.2 annotates both genomes). Classification
    never uses the reference IS table (§4.3), and losses come from the swapped run,
    which annotates the reference as its query. This skips the slowest step for one
@@ -112,6 +114,69 @@ texts are in `src/MOBster/viz/vendor/`.
 8. **Two extra output columns, `element_family` and `element_cluster`**, copied from the
    ISEScan table's `family` and `cluster` columns. The map's tooltip needs both
    (`viz_instructions.md` §5), and the §6 schema had only `element_name`.
+9. **Partial elements are classified, not set aside** (spec §4.3 emits them as
+   `AMB_PARTIAL_ELEMENT`, which is no longer produced). The construct excises exactly the
+   annotated span, so ANC/NEW is decided against the partial's own length: a fragment
+   present in the reference gives a gap equal to its length (ANC), and an empty site
+   gives ≈ 0 (NEW). They are identifiable by `element_type` (`p`), and the map's tooltip
+   shows `Type: partial` for them. Where the annotated boundary falls inside a longer
+   copy, a flank contains element sequence and the call ends up AMB through the normal
+   predicates, not as a wrong ANC/NEW.
+   - Tier 2: all 127 partials were classified, with no wrong ANC/NEW. 112 were ANC (all
+     `anc_residual` 0), including 72 fragments with no truth match. 5 were new IS3
+     insertions that ISEScan labels partial, now NEW. The other 10 were AMB. 8 of them
+     are one IS3 copy that ISEScan truncated by 916 bp, which is `AMB_NO_MIDPOINT_SPAN`
+     in every case.
+   - Real data (barcode05): the 168 bp IS3 fragment is now ANC with residual 0.
+10. **Flank-pair check: a second alignment pass and two new reason codes,
+    `AMB_MULTI_PAIRING` and `AMB_FLANK_CONFLICT`.** The construct alignment assumes both
+    flanks are unique in the reference. In IS-dense genomes they often are not, which
+    breaks it in two ways:
+    - **(a) A flank lies inside a neighbouring multi-copy IS.** It matches every copy
+      equally, and minimap2 puts its primary hit at the wrong one. The result is AMB
+      with `NO_MIDPOINT_SPAN`, `COMPLEX`, or `GAP_UNEXPLAINED` (when the wrong copy is
+      downstream on the same strand).
+    - **(b) The reference has a copy of the site without the element.** This can be a
+      paralog of the site, a tandem copy of the element, or a nested same-family
+      insertion. The construct aligns in one piece to the element-free copy, which
+      beats the true split alignment. minimap2 then drops the split alignment, so the
+      result is a false NEW.
+
+    So each flank is also aligned on its own (`work/flanks.fasta`, `work/flanks.sam`;
+    minimap2 asm5 with `-N FLANK_MAX_SECONDARY`, i.e. 100). Every (left hit, right hit)
+    pair is listed that is on one record and strand, brackets the midpoint, covers
+    `MIN_COVERAGE`, passes the off-midpoint indel guard, and has a gap within the NEW
+    or ANC tolerance. These *consistent pairs* are counted in the new column
+    `n_flank_pairs`.
+    - **Confirmation:** a construct ANC/NEW stands only if there is exactly one
+      consistent pair, with the same call, on the same record and strand, and with the
+      reference base at the midpoint within `MIDPOINT_WINDOW` (25 bp) of the
+      construct's. Otherwise the call becomes AMB: `AMB_MULTI_PAIRING` for more than
+      one pair, and **`AMB_FLANK_CONFLICT`** for no pair or one that disagrees. A
+      confirmed ANC reports the pair's reference span (see deviation 6).
+    - **Rescue:** a construct AMB of one of the three statuses above is called from the
+      flank pair when there is exactly one consistent pair **and** at least one flank
+      has more than one placement (primary + secondary hits; supplementary pieces
+      don't count). The repeated flank is what explains the construct's miss. A
+      construct AMB with two single-copy flanks keeps its status, and so does a real
+      disruption, which pairs with the same unexplained gap and so has no consistent
+      pair.
+
+    Results:
+    - Before the change, every ANC and NEW call that was correct had exactly one
+      consistent pair at the same site: 870 ANC and 58 NEW across the benchmark, and
+      all 16 real NEWs in barcode05. So confirmation removed no correct call.
+    - Tier 1: one IS1 copy with an IS-flanked side (`AMB_COMPLEX` in all 7 cases) is
+      now ANC, and nothing else changed.
+    - Tier 2: `anc` went from 45/48 to 48/48 and `anc_background` from 300/320 to
+      320/320; every NEW class is unchanged. The ISAS1 false NEW (gap 25, an R flank
+      smeared into a diverged repeat at the element's own start) in every case,
+      including `unmodified`, is now `AMB_FLANK_CONFLICT`.
+    - Real data (K. sucrofermentans DSM15973 against its ancestor): 11 AMB became ANC
+      (residual 0), and both false NEWs became `AMB_MULTI_PAIRING`. All 11 rescues
+      have a repeated flank.
+    - Not handled: an element where both flanks are repeat sequence, e.g. a
+      same-family IS nested inside another copy. That stays AMB.
 
 ## Tests and benchmark
 

@@ -31,10 +31,20 @@ def minimap2_cmd(reference: Path, constructs: Path, threads: int) -> list[str]:
             str(reference), str(constructs)]
 
 
-def run_minimap2(reference: Path, constructs: Path, sam: Path, threads: int) -> Path:
+def flank_minimap2_cmd(reference: Path, flanks: Path, threads: int) -> list[str]:
+    # Each flank aligned on its own, keeping up to FLANK_MAX_SECONDARY secondary hits
+    # (asm5 default -N 5 is fewer than the copy number of common IS families, so the
+    # copy adjacent to the element could be dropped). -p stays at the preset default:
+    # repeat copies score alike, unrelated hits do not.
+    return ["minimap2", "-x", "asm5", "-N", str(C.FLANK_MAX_SECONDARY), "-a", "-t", str(threads),
+            str(reference), str(flanks)]
+
+
+def run_minimap2(reference: Path, constructs: Path, sam: Path, threads: int,
+                 flanks: bool = False) -> Path:
     if shutil.which("minimap2") is None:
         raise InputError("minimap2 not found on PATH (activate the 'mobster' conda env)")
-    cmd = minimap2_cmd(reference, constructs, threads)
+    cmd = (flank_minimap2_cmd if flanks else minimap2_cmd)(reference, constructs, threads)
     logger.info("Aligning: %s > %s", " ".join(cmd), sam)
     with open(sam, "w") as out:
         proc = subprocess.run(cmd, stdout=out, stderr=subprocess.PIPE, text=True)

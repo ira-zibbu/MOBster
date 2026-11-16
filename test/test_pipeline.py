@@ -44,13 +44,13 @@ def genomes():
     assert q[s_b - 6:s_b - 1] == q[e_b:e_b + 5]            # TSD flanks the element
     near_end = len(q) - 300                                # flank truncated
     elements = [("IS_A", s_a, e_a, "c"), ("IS_S", s_s, e_s, "c"), ("IS_B", s_b, e_b, "c"), ("IS_C", s_c, e_c, "c"),
-                ("IS_P", s_b, e_b, "p"), ("IS_T", near_end - 100, near_end, "c")]
+                ("IS_P", s_b, e_b, "p"), ("IS_Q", s_s, e_s, "p"), ("IS_T", near_end - 100, near_end, "c")]
     expect = {"IS_A": ("ANC", C.OK), "IS_S": ("ANC", C.OK), "IS_B": ("NEW", C.OK), "IS_C": ("NEW", C.OK),
-              "IS_P": ("AMB", C.AMB_PARTIAL_ELEMENT), "IS_T": ("AMB", C.AMB_FLANK_TRUNCATED)}
+              "IS_P": ("NEW", C.OK), "IS_Q": ("ANC", C.OK), "IS_T": ("AMB", C.AMB_FLANK_TRUNCATED)}
     # Ancestral copies' TSD-excluded spans in the REFERENCE (the query is identical there).
-    refspan = {"IS_A": (s_a, e_a), "IS_S": (s_s, e_s)}
+    refspan = {"IS_A": (s_a, e_a), "IS_S": (s_s, e_s), "IS_Q": (s_s, e_s)}
     assert ref[s_a - 1:e_a] == is_a and ref[s_s - 1:e_s] == is_s
-    return ref, q, elements, expect, {"IS_B": -5, "IS_C": 0}, refspan
+    return ref, q, elements, expect, {"IS_B": -5, "IS_C": 0, "IS_P": -5}, refspan
 
 
 def write_inputs(tmp: Path, ref: str, q: str, elements, qname="query"):
@@ -76,8 +76,9 @@ def check(rows, expect, tsd, refspan):
     for name, gap in tsd.items():
         assert rows[name]["midpoint_gap"] == gap
         assert rows[name]["tsd_estimate"] == -gap
-    for name in ("IS_P", "IS_T"):
-        assert rows[name]["midpoint_gap"] == ""
+    # Partial elements are classified like complete ones (README deviation 9).
+    assert rows["IS_Q"]["midpoint_gap"] == 768 and rows["IS_Q"]["anc_residual"] == 0
+    assert rows["IS_T"]["midpoint_gap"] == ""
     # reference_position/reference_end: the ancestral copy's span in the reference ...
     for name, (s, e) in refspan.items():
         assert (rows[name]["reference_position"], rows[name]["reference_end"]) == (s, e), rows[name]

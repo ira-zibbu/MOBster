@@ -13,7 +13,7 @@ from . import constants as C
 from .align import run_minimap2
 from .annotate import run_isescan
 from .classify import classify_construct
-from .constructs import index_from_name, write_constructs
+from .constructs import index_from_name, side_from_name, write_constructs
 from .inputs import Element, load_fasta, read_is_table
 from .viz import read_calls, write_map
 
@@ -21,7 +21,7 @@ logger = logging.getLogger("MOBster")
 
 COLUMNS = [
     "query_record", "element_name", "element_family", "element_cluster", "element_start", "element_end", "element_length",
-    "element_type", "delta", "call", "status", "n_records", "n_loci", "best_locus",
+    "element_type", "delta", "call", "status", "n_records", "n_loci", "n_flank_pairs", "best_locus",
     "construct_coverage", "identity", "midpoint_gap", "anc_residual", "tsd_estimate",
     "reference_position", "reference_end",
 ]
@@ -35,15 +35,26 @@ def read_alignments(sam: Path) -> dict[int, list[pysam.AlignedSegment]]:
     return by_construct
 
 
+def read_flank_alignments(sam: Path) -> dict[int, list[tuple[str, pysam.AlignedSegment]]]:
+    by_construct: dict[int, list[tuple[str, pysam.AlignedSegment]]] = defaultdict(list)
+    with pysam.AlignmentFile(str(sam), "r") as fh:
+        for aln in fh:
+            by_construct[index_from_name(aln.query_name)].append((side_from_name(aln.query_name), aln))
+    return by_construct
+
+
 def classify_elements(elements: list[Element], query: dict[str, str], reference: Path,
                       workdir: Path, threads: int) -> list[dict]:
     workdir.mkdir(parents=True, exist_ok=True)
-    constructs_fa = workdir / "constructs.fasta"
-    skipped = write_constructs(elements, query, constructs_fa)
+    constructs_fa, flanks_fa = workdir / "constructs.fasta", workdir / "flanks.fasta"
+    skipped = write_constructs(elements, query, constructs_fa, flanks_path=flanks_fa)
     alignments: dict[int, list] = {}
+    flank_alns: dict[int, list] = {}
     if len(skipped) < len(elements):
         sam = run_minimap2(reference, constructs_fa, workdir / "constructs.sam", threads)
         alignments = read_alignments(sam)
+        fsam = run_minimap2(reference, flanks_fa, workdir / "flanks.sam", threads, flanks=True)
+        flank_alns = read_flank_alignments(fsam)
 
     Lc, M = 2 * C.DELTA, C.DELTA
     rows = []
@@ -55,7 +66,8 @@ def classify_elements(elements: list[Element], query: dict[str, str], reference:
         if el.index in skipped:
             row.update(call="AMB", status=skipped[el.index])
         else:
-            row.update(classify_construct(alignments.get(el.index, []), el.length, Lc, M))
+            row.update(classify_construct(alignments.get(el.index, []), el.length, Lc, M,
+                                          flank_alns.get(el.index, [])))
         rows.append({k: row.get(k, "") for k in COLUMNS})
     return rows
 

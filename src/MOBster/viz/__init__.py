@@ -51,6 +51,10 @@ TOOLTIP_FIELDS = [
 ]
 
 
+def is_partial(element_type: str) -> bool:
+    return element_type.strip().lower() in ("p", "partial")
+
+
 # --------------------------------------------------------------------------- nudging
 
 def _isotonic(y: list[float]) -> list[float]:
@@ -129,6 +133,8 @@ def build_map_data(rows: list[dict], record_lengths: dict[str, int], query_name:
     for idx, r in enumerate(rows):
         s, e = int(r["element_start"]), int(r["element_end"])
         tip = [[label, r[col]] for col, label in TOOLTIP_FIELDS if r.get(col, "") != ""]
+        if is_partial(r.get("element_type", "")):    # complete is the default; only flag partials
+            tip.insert(3, ["Type", "partial"])
         elements.append(dict(i=idx, ring=r["call"], block=block[r["query_record"]],
                              true_pos=(s + e) / 2, pos=(s + e) / 2, tip=tip))
 

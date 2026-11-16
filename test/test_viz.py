@@ -43,7 +43,7 @@ def sample_rows():
             anc_residual=0),
         row("chrA", 301_500, 302_800, "ANC", fam="IS3", cluster="IS3_9", midpoint_gap=1300,
             anc_residual=-1),
-        row("plasmid|B", 150_000, 150_768, "AMB", "AMB_PARTIAL_ELEMENT", element_type="p"),
+        row("plasmid|B", 150_000, 150_768, "AMB", "AMB_NO_MIDPOINT_SPAN", element_type="p"),
         row("plasmid|B", 150_900, 151_700, "AMB", "AMB_MULTI_LOCUS", midpoint_gap=-9,
             anc_residual=-810),
         row("contig_3", 200, 968, "AMB", "AMB_FLANK_TRUNCATED"),
@@ -83,6 +83,13 @@ def test_tooltip_omits_empty_fields():
     labels = [k for k, _ in partial]
     assert "midpoint_gap" not in labels and "tsd_estimate" not in labels
     assert {"Element", "Family", "Cluster", "Call", "Status"} <= set(labels)
+
+
+def test_tooltip_flags_partial_elements_only():
+    data = build_map_data(sample_rows(), RECORDS, "q.fasta", "r.fasta")
+    tips = [dict(e["tip"]) for e in data["elements"]]
+    assert tips[4]["Type"] == "partial"
+    assert all("Type" not in t for i, t in enumerate(tips) if i != 4)
 
 
 def test_missing_record_fails_loudly():
@@ -153,6 +160,8 @@ def test_4_tooltip_shows_every_nonempty_field(report):
     for p in rep["points"]:
         r = rows[p["i"]]
         expected = {label: r[col] for col, label in TOOLTIP_FIELDS if r[col] != ""}
+        if r["element_type"] == "p":
+            expected["Type"] = "partial"
         assert p["tooltip"] == expected
 
 

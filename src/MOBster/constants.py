@@ -13,11 +13,11 @@ def anc_tolerance(element_length: int) -> float:
     return max(50.0, 0.05 * element_length)
 
 
-# Reason codes (spec §6). AMB_LOW_COVERAGE is an addition: a group spans the
+# Reason codes (spec §6). AMB_PARTIAL_ELEMENT is not emitted: partial elements are
+# classified like complete ones (see constructs.precheck). AMB_LOW_COVERAGE is an addition: a group spans the
 # midpoint but covers < MIN_COVERAGE of the construct, so no locus exists even
 # though the midpoint was spanned (neither NO_LOCUS nor NO_MIDPOINT_SPAN is true).
 OK = "OK"
-AMB_PARTIAL_ELEMENT = "AMB_PARTIAL_ELEMENT"
 AMB_FLANK_TRUNCATED = "AMB_FLANK_TRUNCATED"
 AMB_NO_LOCUS = "AMB_NO_LOCUS"
 AMB_NO_MIDPOINT_SPAN = "AMB_NO_MIDPOINT_SPAN"
@@ -26,6 +26,15 @@ AMB_MULTI_LOCUS = "AMB_MULTI_LOCUS"
 AMB_GAP_UNEXPLAINED = "AMB_GAP_UNEXPLAINED"
 AMB_INDEL_OFF_MIDPOINT = "AMB_INDEL_OFF_MIDPOINT"
 AMB_COMPLEX = "AMB_COMPLEX"
+# Additions (flank-pair check, classify.classify_construct). For a construct ANC/NEW,
+# the flanks aligned separately pair consistently (a clean ANC or NEW reading):
+#   at more than one place                                  -> AMB_MULTI_PAIRING
+#   nowhere, or once but with another call or another site  -> AMB_FLANK_CONFLICT
+AMB_MULTI_PAIRING = "AMB_MULTI_PAIRING"
+AMB_FLANK_CONFLICT = "AMB_FLANK_CONFLICT"
+
+# Secondary hits kept per separately aligned flank (minimap2 -N).
+FLANK_MAX_SECONDARY = 100
 
 
 # minimap2 chaining bandwidth (-r INT,INT), overriding asm5's 1k,100k. Not in the

@@ -38,12 +38,14 @@ class Rec:
     re: int            # reference end (exclusive)
     secondary: bool
     aln: pysam.AlignedSegment = field(repr=False, compare=False)
-    hclip: int = 0     # leading hard clip; offset from stored-seq to construct coords
+    hclip: int = 0     # offset from stored-seq to construct coords (leading hard clip + offset)
 
     @classmethod
-    def from_aln(cls, aln: pysam.AlignedSegment) -> "Rec":
+    def from_aln(cls, aln: pysam.AlignedSegment, offset: int = 0) -> "Rec":
+        """offset: where the aligned sequence starts in construct coordinates (non-zero
+        for a separately aligned flank, see flank_offset)."""
         cig = aln.cigartuples or []
-        hclip = cig[0][1] if cig and cig[0][0] == _HARD_CLIP else 0
+        hclip = (cig[0][1] if cig and cig[0][0] == _HARD_CLIP else 0) + offset
         return cls(
             ref=aln.reference_name,
             strand="-" if aln.is_reverse else "+",
@@ -234,16 +236,145 @@ def _secondary_loci(secondaries: list[Rec], Lc: int, M: int, w: int) -> int:
     return len(seen)
 
 
+def flank_offset(side: str, reverse: bool, delta: int) -> int:
+    """Construct-coordinate start of a separately aligned flank.
+
+    A '+' construct is L then R. A '-' record stores the reverse complement,
+    rc(R) then rc(L), so the offsets swap; construct coordinates then ascend with
+    reference coordinates on both strands, as for whole-construct records.
+    """
+    return delta if (side == "R") != reverse else 0
+
+
+def flank_pairs(flank_alns: list[tuple[str, pysam.AlignedSegment]], element_length: int,
+                Lc: int, M: int) -> list[tuple[str, GroupResult]]:
+    """Every (left-flank hit, right-flank hit) pair that reads as a clean NEW or ANC.
+
+    Hits include secondaries. A pair must be on one reference record and strand, bracket
+    the midpoint like a two-record group, cover MIN_COVERAGE of the construct, pass the
+    off-midpoint indel guard, and have a gap within the NEW or ANC tolerance.
+    Returns [(call, group)], one per distinct pair of placements.
+    """
+    w, delta = C.MIDPOINT_WINDOW, M
+    hits: dict[str, list[Rec]] = {"L": [], "R": []}
+    for side, a in flank_alns:
+        if not a.is_unmapped:
+            hits[side].append(Rec.from_aln(a, flank_offset(side, a.is_reverse, delta)))
+    max_dr = element_length + C.anc_tolerance(element_length) + 2 * w
+    out, seen = [], set()
+    for lh in hits["L"]:
+        for rh in hits["R"]:
+            if (lh.ref, lh.strand) != (rh.ref, rh.strand):
+                continue
+            a, b = sorted((lh, rh), key=lambda r: r.qs)
+            if not -C.OVL_MAX - w <= b.rs - a.re <= max_dr:
+                continue
+            key = (lh.ref, lh.strand, lh.rs, rh.rs)
+            if key in seen:
+                continue
+            g = evaluate_group(lh.ref, lh.strand, [lh, rh], Lc, M)
+            if g.shape != "two" or g.coverage < C.MIN_COVERAGE or g.max_off_indel > C.MAX_OFFSET_INDEL:
+                continue
+            if abs(g.gap) <= C.TSD_TOLERANCE:
+                call = "NEW"
+            elif abs(g.gap - element_length) <= C.anc_tolerance(element_length):
+                call = "ANC"
+            else:
+                continue
+            seen.add(key)
+            out.append((call, g))
+    return out
+
+
+# Construct-level AMB statuses a flank pair may resolve. All are what a repeat flank's
+# primary hit at the wrong copy produces: on another record or strand
+# (NO_MIDPOINT_SPAN), out of order (COMPLEX), or downstream on the same strand, where
+# the two records still bracket and the "gap" is the distance to that copy
+# (GAP_UNEXPLAINED). A real disruption is not rescued: its flanks pair with the same
+# unexplained gap, which is not a consistent pair.
+RESCUABLE = {C.AMB_NO_MIDPOINT_SPAN, C.AMB_COMPLEX, C.AMB_GAP_UNEXPLAINED}
+
+
+def flank_copies(flank_alns: list[tuple[str, pysam.AlignedSegment]]) -> dict[str, int]:
+    """Placements per flank: primary + secondary records. Supplementary records are
+    pieces of one placement (e.g. a flank split across a linear reference's end)."""
+    n = {"L": 0, "R": 0}
+    for side, a in flank_alns:
+        if not a.is_unmapped and not a.is_supplementary:
+            n[side] += 1
+    return n
+
+
+def call_from_group(g: GroupResult, element_length: int) -> dict:
+    """ANC/NEW fields for a clean flank-pair group (gap already within a tolerance)."""
+    out = dict(best_locus=g.locus_str, construct_coverage=round(g.coverage, 4),
+               identity=round(g.identity, 4), midpoint_gap=g.gap,
+               anc_residual=g.gap - element_length)
+    if abs(g.gap) <= C.TSD_TOLERANCE:
+        site = "" if g.ref_at_mid is None else g.ref_at_mid + 1
+        return dict(out, call="NEW", status=C.OK, tsd_estimate=-g.gap, reference_position=site)
+    pos = end = ""
+    if g.ref_span is not None:
+        pos, end = g.ref_span[0] + 1, g.ref_span[1]
+    return dict(out, call="ANC", status=C.OK, reference_position=pos, reference_end=end)
+
+
+def same_site(a: GroupResult, b: GroupResult, w: int = C.MIDPOINT_WINDOW) -> bool:
+    """Same reference record and strand, and the reference base at the construct
+    midpoint within w: the insertion point for NEW, the copy's far end for ANC."""
+    return ((a.ref, a.strand) == (b.ref, b.strand) and a.ref_at_mid is not None
+            and b.ref_at_mid is not None and abs(a.ref_at_mid - b.ref_at_mid) <= w)
+
+
 def classify_construct(alns: list[pysam.AlignedSegment], element_length: int,
-                       Lc: int, M: int) -> dict:
-    """Classify one construct from all of its alignment records."""
+                       Lc: int, M: int,
+                       flank_alns: list[tuple[str, pysam.AlignedSegment]] | None = None) -> dict:
+    """Classify one construct, then check it against its separately aligned flanks.
+
+    flank_alns: [(side, record)], side "L" or "R". When given:
+      * Confirmation: a construct ANC/NEW stands only if there is exactly one consistent
+        flank pair, giving the same call at the same site (same_site). More than one
+        pair -> AMB_MULTI_PAIRING; none, or one that disagrees -> AMB_FLANK_CONFLICT.
+        A confirmed ANC reports the pair's reference span.
+      * Rescue: a construct AMB in RESCUABLE is called from the flank pair when there is
+        exactly one consistent pair and at least one flank has more than one placement
+        (the repeat flank that explains why the construct's records missed).
+    """
+    out, best = _classify_records(alns, element_length, Lc, M)
+    if flank_alns is None:
+        return out
+    pairs = flank_pairs(flank_alns, element_length, Lc, M)
+    out["n_flank_pairs"] = len(pairs)
+    if out["call"] in ("ANC", "NEW"):
+        if len(pairs) == 1 and pairs[0][0] == out["call"] and best is not None \
+                and same_site(best, pairs[0][1]):
+            g = pairs[0][1]
+            if out["call"] == "ANC" and g.ref_span is not None:
+                # The pair's span, not the construct's: a construct record can extend
+                # a flank through micro-homology into the copy and trim the span by a
+                # few bp; a separately aligned flank cannot run past its own end.
+                out["reference_position"], out["reference_end"] = g.ref_span[0] + 1, g.ref_span[1]
+            return out
+        status = C.AMB_MULTI_PAIRING if len(pairs) > 1 else C.AMB_FLANK_CONFLICT
+        return dict(out, call="AMB", status=status, tsd_estimate="",
+                    reference_position="", reference_end="")
+    if (out["status"] in RESCUABLE and len(pairs) == 1
+            and max(flank_copies(flank_alns).values()) > 1):
+        return dict(out, **call_from_group(pairs[0][1], element_length))
+    return out
+
+
+def _classify_records(alns: list[pysam.AlignedSegment], element_length: int,
+                      Lc: int, M: int) -> tuple[dict, GroupResult | None]:
+    """Classify one construct from all of its alignment records (spec §4.6).
+    Returns the output fields and the reported group (None if no group spans)."""
     w = C.MIDPOINT_WINDOW
     mapped = [a for a in alns if not a.is_unmapped]
     out = dict(n_records=len(mapped), n_loci=0, best_locus="", construct_coverage="",
                identity="", midpoint_gap="", anc_residual="", tsd_estimate="",
                reference_position="", reference_end="")
     if not mapped:
-        return dict(out, call="AMB", status=C.AMB_NO_LOCUS)
+        return dict(out, call="AMB", status=C.AMB_NO_LOCUS), None
 
     recs = [Rec.from_aln(a) for a in mapped]
     groups: dict[tuple[str, str], list[Rec]] = defaultdict(list)
@@ -269,21 +400,21 @@ def classify_construct(alns: list[pysam.AlignedSegment], element_length: int,
 
     if not spanning:
         status = C.AMB_COMPLEX if any(g.shape == "complex" for g in results) else C.AMB_NO_MIDPOINT_SPAN
-        return dict(out, call="AMB", status=status)
+        return dict(out, call="AMB", status=status), best
     if not loci:
-        return dict(out, call="AMB", status=C.AMB_LOW_COVERAGE)
+        return dict(out, call="AMB", status=C.AMB_LOW_COVERAGE), best
     if n_loci > 1:
-        return dict(out, call="AMB", status=C.AMB_MULTI_LOCUS)
+        return dict(out, call="AMB", status=C.AMB_MULTI_LOCUS), best
 
     assert best is not None and best.gap is not None
     if best.max_off_indel > C.MAX_OFFSET_INDEL:
-        return dict(out, call="AMB", status=C.AMB_INDEL_OFF_MIDPOINT)
+        return dict(out, call="AMB", status=C.AMB_INDEL_OFF_MIDPOINT), best
     if abs(best.gap) <= C.TSD_TOLERANCE:
         site = "" if best.ref_at_mid is None else best.ref_at_mid + 1   # 1-based for output
-        return dict(out, call="NEW", status=C.OK, tsd_estimate=-best.gap, reference_position=site)
+        return dict(out, call="NEW", status=C.OK, tsd_estimate=-best.gap, reference_position=site), best
     if abs(best.gap - element_length) <= C.anc_tolerance(element_length):
         pos = end = ""
         if best.ref_span is not None:
             pos, end = best.ref_span[0] + 1, best.ref_span[1]   # 1-based inclusive for output
-        return dict(out, call="ANC", status=C.OK, reference_position=pos, reference_end=end)
-    return dict(out, call="AMB", status=C.AMB_GAP_UNEXPLAINED)
+        return dict(out, call="ANC", status=C.OK, reference_position=pos, reference_end=end), best
+    return dict(out, call="AMB", status=C.AMB_GAP_UNEXPLAINED), best
