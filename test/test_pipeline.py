@@ -139,8 +139,10 @@ def test_minus_strand_ordering_predicate_on_raw_pysam(tmp_path, genomes):
 def test_cli_end_to_end(tmp_path, genomes):
     ref, q, elements, expect, *_ = genomes
     write_inputs(tmp_path, ref, q, elements)
+    (tmp_path / "r.csv").write_text("seqID,family,cluster,isBegin,isEnd,isLen,type\n"
+                                    "ref,X,IS_A,10009,11355,1347,c\n")
     rc = main(["--reference", str(tmp_path / "ref.fasta"), "--query", str(tmp_path / "q.fasta"),
-               "--outdir", str(tmp_path / "out"), "--is-table-reference", str(tmp_path / "q.csv"),
+               "--outdir", str(tmp_path / "out"), "--is-table-reference", str(tmp_path / "r.csv"),
                "--is-table-query", str(tmp_path / "q.csv")])
     assert rc == 0
     import csv
@@ -149,6 +151,17 @@ def test_cli_end_to_end(tmp_path, genomes):
     assert {k: (v["call"], v["status"]) for k, v in rows.items()} == expect
     page = (tmp_path / "out" / "mobster_map.html").read_text()     # the map comes with every run
     assert "q.fasta" in page and "ref.fasta" in page
+    paired = (tmp_path / "out" / "mobster_map_paired.html").read_text()   # ... and the paired map
+    assert '"paired":true' in paired and '"REF":1' in paired
+
+
+def test_reference_table_with_unknown_record_fails(tmp_path, genomes):
+    ref, q, elements, *_ = genomes
+    write_inputs(tmp_path, ref, q, elements)
+    rc = main(["--reference", str(tmp_path / "ref.fasta"), "--query", str(tmp_path / "q.fasta"),
+               "--outdir", str(tmp_path / "out"), "--is-table-reference", str(tmp_path / "q.csv"),
+               "--is-table-query", str(tmp_path / "q.csv")])
+    assert rc == 2                                    # q.csv names record 'query', not 'ref'
 
 
 def test_swap_reports_loss(tmp_path, genomes):
@@ -163,18 +176,18 @@ def test_swap_reports_loss(tmp_path, genomes):
     assert rows[0]["call"] == "ANC"
 
 
-def test_isescan_runs_on_query_only(tmp_path, genomes, monkeypatch):
-    """The reference is never annotated; ISEScan runs once, on the query."""
+def test_isescan_runs_on_both_genomes(tmp_path, genomes, monkeypatch):
+    """ISEScan runs on the query and on the reference (for the paired map only)."""
     import MOBster.pipeline as pipeline
     ref, q, elements, *_ = genomes
     write_inputs(tmp_path, ref, q, elements)
     calls = []
 
     def fake_isescan(fasta, outdir, threads):
-        calls.append(Path(fasta).name)
-        return tmp_path / "q.csv"
+        calls.append((Path(fasta).name, Path(outdir).name))
+        return tmp_path / "q.csv" if Path(fasta).name == "q.fasta" else None   # None: no IS found
 
     monkeypatch.setattr(pipeline, "run_isescan", fake_isescan)
     pipeline.run(tmp_path / "ref.fasta", tmp_path / "q.fasta", tmp_path / "out", 1, None, None)
-    assert calls == ["q.fasta"]
-    assert not (tmp_path / "out" / "isescan" / "reference").exists()
+    assert calls == [("q.fasta", "query"), ("ref.fasta", "reference")]
+    assert (tmp_path / "out" / "mobster_map_paired.html").exists()

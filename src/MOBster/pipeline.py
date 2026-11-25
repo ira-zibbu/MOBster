@@ -14,8 +14,8 @@ from .align import run_minimap2
 from .annotate import run_isescan
 from .classify import RESCUABLE, classify_construct, find_composites
 from .constructs import index_from_name, side_from_name, write_constructs
-from .inputs import Element, load_fasta, read_is_table
-from .viz import read_calls, write_map
+from .inputs import Element, InputError, load_fasta, read_is_table
+from .viz import read_calls, write_map, write_paired_map
 
 logger = logging.getLogger("MOBster")
 
@@ -97,17 +97,19 @@ def summarise(rows: list[dict]) -> None:
 def run(reference: Path, query: Path, outdir: Path, threads: int,
         is_table_reference: Path | None, is_table_query: Path | None) -> Path:
     outdir.mkdir(parents=True, exist_ok=True)
-    load_fasta(reference, "reference")
+    reference_seqs = load_fasta(reference, "reference")
     query_seqs = load_fasta(query, "query")
 
-    # Only the query is annotated: classification never uses the reference IS table
-    # (§4.3), and element losses come from the swapped run, which annotates the
-    # reference as its query. (Deviation from §4.2, which annotates both genomes.)
-    if is_table_reference is not None:
-        logger.info("--is-table-reference is not used by v0.1 classification; ignoring %s",
-                    is_table_reference)
+    # Both genomes are annotated (spec §4.2), but classification never uses the reference
+    # table (§4.3): it only marks the reference's IS elements on the paired map.
     if is_table_query is None:
         is_table_query = run_isescan(query, outdir / "isescan" / "query", threads)
+    if is_table_reference is None:
+        is_table_reference = run_isescan(reference, outdir / "isescan" / "reference", threads)
+    reference_elements = read_is_table(is_table_reference) if is_table_reference else []
+    unknown = sorted({el.record for el in reference_elements} - set(reference_seqs))
+    if unknown:
+        raise InputError(f"reference IS table refers to record(s) not in the reference FASTA: {unknown}")
 
     elements = read_is_table(is_table_query) if is_table_query else []
     rows = classify_elements(elements, query_seqs, reference, outdir / "work", threads)
@@ -117,6 +119,10 @@ def run(reference: Path, query: Path, outdir: Path, threads: int,
     logger.info("Wrote %s", table)
     # Interactive circular map (docs/viz_instructions.md). Uses the written rows so the
     # map shows exactly what is in the table.
-    write_map(read_calls(table), query, reference, outdir / "mobster_map.html",
-              record_lengths={k: len(v) for k, v in query_seqs.items()})
+    calls = read_calls(table)
+    query_lengths = {k: len(v) for k, v in query_seqs.items()}
+    write_map(calls, query, reference, outdir / "mobster_map.html", record_lengths=query_lengths)
+    write_paired_map(calls, query, reference, reference_elements, outdir / "mobster_map_paired.html",
+                     query_lengths=query_lengths,
+                     reference_lengths={k: len(v) for k, v in reference_seqs.items()})
     return table

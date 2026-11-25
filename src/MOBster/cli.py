@@ -47,8 +47,8 @@ def parse_args(argv=None) -> argparse.Namespace:
                    help="output directory (default: mobster_out)")
     p.add_argument("--threads", type=int, default=1, help="threads for ISEScan/minimap2")
     p.add_argument("--is-table-reference", type=Path,
-                   help="precomputed ISEScan table for the reference; accepted but not "
-                        "used in v0.1 (the reference is not annotated)")
+                   help="precomputed ISEScan table for the reference (skips ISEScan on it); "
+                        "used only to mark reference IS elements on the paired map")
     p.add_argument("--is-table-query", type=Path,
                    help="precomputed ISEScan table for the query (skips ISEScan)")
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")

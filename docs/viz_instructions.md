@@ -122,6 +122,29 @@ classes in the benchmark.
 - The generator must fail loudly if a query record named in the CSV is absent from the
   FASTA, rather than silently dropping those elements.
 
+## 7b. Paired map (addition, README "Interactive map")
+
+A second page, `mobster_map_paired.html`, written next to the first, with the same
+template, libraries and tooltip rules.
+
+- **Arcs.** Reference records first, then query records, each in FASTA order. Each
+  genome's arcs get one colour, and the legend has a swatch for each genome.
+- **Rings.**
+  - Query arcs carry the call rings of §3.
+  - Reference arcs carry one ring of unclassified reference IS elements (ISEScan on the
+    reference), at the outermost radius.
+  - The reference elements' tooltip gives element, family, cluster, genome, record and
+    coordinates, plus `Type: partial` for partials. It shows no call.
+- **Chords.** One ribbon per COMPOSITE unit with a filled `source_cargo`. It joins that
+  reference span to the cargo in the query (between the two copies), in the COMPOSITE
+  colour, with a tooltip giving the unit, both cargo spans and the orientation.
+  - A plain ribbon means the cargo has the same orientation in both genomes.
+  - A ribbon twisted once means it is inverted (Circos convention).
+  - The ribbons are drawn with D3 paths, because CircosJS's chord track (`d3.ribbon`)
+    cannot twist.
+  - Each end is at least `CHORD_MIN_RAD` wide, centred on the true span, so a short
+    cargo's twist stays visible. The tooltip notes the widening, as §6 does for nudging.
+
 ## 8. Out of scope
 
 - **Legend-click filtering of rings and families.** Explicitly deferred, though it is the

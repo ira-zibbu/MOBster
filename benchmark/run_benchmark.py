@@ -259,8 +259,12 @@ def cases_list():
 
 
 def mobster(query, table, outdir, threads):
+    # The reference table only feeds the paired map; it is computed once and cached, so
+    # neither tier re-runs ISEScan on REL606.
+    ref_table = isescan(REF_FASTA, OUT / "isescan" / "reference", threads)
     cmd = [sys.executable, "-m", "MOBster", "--reference", str(REF_FASTA), "--query", str(query),
-           "--outdir", str(outdir), "--threads", str(threads), "--is-table-query", str(table)]
+           "--outdir", str(outdir), "--threads", str(threads), "--is-table-query", str(table),
+           "--is-table-reference", str(ref_table)]
     subprocess.run(cmd, check=True, capture_output=True)
 
 

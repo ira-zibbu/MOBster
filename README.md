@@ -31,8 +31,9 @@ pip install -e .
 
 ```bash
 mobster --reference R.fasta --query Q.fasta --outdir results/ --threads 8
-# skip ISEScan with a precomputed query table (ISEScan CSV/TSV format):
-mobster --reference R.fasta --query Q.fasta --outdir results/ --is-table-query Q.fasta.csv
+# skip ISEScan with precomputed tables (ISEScan CSV/TSV format):
+mobster --reference R.fasta --query Q.fasta --outdir results/ \
+        --is-table-query Q.fasta.csv --is-table-reference R.fasta.csv
 
 # element losses: swap the genomes (ISEScan then annotates R, as the query)
 mobster --reference Q.fasta --query R.fasta --outdir results_losses/
@@ -42,10 +43,11 @@ Outputs in `--outdir`:
 
 - `mobster_calls.csv`: one row per query element (spec §6 schema)
 - `mobster_map.html`: interactive circular map of the calls (see below)
+- `mobster_map_paired.html`: the same calls with the reference on one circle (see below)
 - `mobster.log`: full debug log (stderr shows INFO and above; stdout is unused)
 - `work/constructs.fasta`, `work/constructs.sam`: the constructs and their alignments
-- `isescan/query/`: ISEScan output for the query, when it was run (the reference is
-  never annotated)
+- `isescan/query/`, `isescan/reference/`: ISEScan output, for each genome it was run on
+  (the reference table only feeds the paired map)
 
 For NEW calls, `reference_position` is the 1-based reference base aligned to the construct
 midpoint. Because minimap2 left-aligns indels, this is the first duplicated base of the
@@ -63,10 +65,26 @@ marks partial elements. Glyphs too close to
 hover individually are spread slightly along their ring; the tooltip says when a glyph was
 moved and by how much.
 
+**Paired map** (`mobster_map_paired.html`):
+- Reference records come first, then query records, on one circle, with each genome's
+  arcs in its own colour.
+- Query elements sit on their call rings as above. The reference's own IS elements (from
+  ISEScan on the reference) sit on one unclassified ring, and their tooltip gives only
+  family, cluster and location.
+- Each COMPOSITE unit with a known `source_cargo` gets a ribbon from that reference span
+  to the cargo between its two copies in the query. A ribbon that crosses over itself
+  means the cargo was inserted inverted relative to the reference (the Circos convention).
+- Each ribbon end is drawn at least 0.07 rad (~16 px) wide, centred on the true span.
+  A 14 kb cargo on a 7 Mb circle would otherwise be a hairline whose twist cannot be
+  seen. The tooltip says when a ribbon was widened, and it always gives true coordinates.
+- The ribbons are drawn with D3, not with CircosJS's chord track. That track uses
+  `d3.ribbon`, which always runs both ends clockwise, so it cannot twist.
+
 Regenerate from an existing table without re-running the pipeline:
 
 ```bash
-python -m MOBster.viz --calls results/mobster_calls.csv --query Q.fasta --reference R.fasta
+python -m MOBster.viz --calls results/mobster_calls.csv --query Q.fasta --reference R.fasta \
+       --is-table-reference results/isescan/reference/R.fasta.csv   # optional: also the paired map
 ```
 
 The page bundles D3 7.9.0 (ISC licence) and CircosJS 2.1.0, which is **GPL-2.0**. Licence
@@ -112,10 +130,11 @@ texts are in `src/MOBster/viz/vendor/`.
    same N bp. The span is the query annotation translated into reference coordinates,
    not an independent boundary estimate. In tier 2, the span offsets equal ISEScan's
    boundary errors exactly (374/374).
-7. **Only the query is annotated** (spec §4.2 annotates both genomes). Classification
-   never uses the reference IS table (§4.3), and losses come from the swapped run,
-   which annotates the reference as its query. This skips the slowest step for one
-   genome. `--is-table-reference` is still accepted, as §7 lists it, but ignored.
+7. **The reference IS table is used only for display.** As in spec §4.2, both genomes
+   are annotated. `--is-table-reference` skips ISEScan on the reference. The reference
+   table marks the reference's IS elements on the paired map and is not classified.
+   Classification never uses it (§4.3), and losses still come from the swapped run.
+   (Until 2026-11-24 the reference was not annotated at all.)
 8. **Two extra output columns, `element_family` and `element_cluster`**, copied from the
    ISEScan table's `family` and `cluster` columns. The map's tooltip needs both
    (`viz_instructions.md` §5), and the §6 schema had only `element_name`.

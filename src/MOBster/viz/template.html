@@ -34,8 +34,9 @@
   .legend .n { margin-left: auto; color: var(--muted); font-variant-numeric: tabular-nums; }
   .note { color: var(--muted); font-size: 12.5px; margin-top: 14px; }
   .note p { margin: 0 0 8px; }
-  /* CircosJS tooltip (it creates div.circos-tooltip on <body>) */
-  div.circos-tooltip {
+  /* CircosJS tooltip (it creates div.circos-tooltip on <body>); chords use div.chord-tooltip */
+  div.chord-tooltip { position: absolute; pointer-events: none; display: none; z-index: 10; }
+  div.circos-tooltip, div.chord-tooltip {
     text-align: left !important; background: #1f2328 !important; color: #fff !important;
     padding: 8px 10px !important; border-radius: 4px; font-size: 12.5px; line-height: 1.35;
     max-width: 340px;
@@ -49,11 +50,13 @@
   .ring-AMB path.point { stroke: transparent; stroke-width: 6px; pointer-events: all; }
   path.point { cursor: default; }
   path.point:hover { filter: brightness(0.75); }
+  path.chord { stroke-width: 0.6px; cursor: default; }
+  path.chord:hover { fill-opacity: 0.8; }
 </style>
 </head>
 <body>
 <header>
-  <h1>MOBster: IS element calls</h1>
+  <h1>__HEADING__</h1>
   <div class="prov">
     <span>Query <b>__QUERY__</b></span>
     <span>Reference <b>__REFERENCE__</b></span>
@@ -65,8 +68,7 @@
   <aside>
     <ul class="legend" id="legend"></ul>
     <div class="note">
-      <p>Each element is drawn once, on the ring for its call, at its position in the
-        <b>query</b>. Arcs are query records, in FASTA order, sized by length.</p>
+      <!--__NOTE__-->
       <p>Hover a glyph for its family, cluster, status and evidence
         (<code>midpoint_gap</code>, <code>anc_residual</code>, <code>tsd_estimate</code>).</p>
       <p>Glyphs closer together than they can be hovered are spread slightly along the
@@ -83,7 +85,7 @@
   "use strict";
   var data = JSON.parse(document.getElementById("mobster-data").textContent);
   var g = data.geometry, rings = data.rings;
-  var ORDER = ["NEW", "COMPOSITE", "ANC", "AMB"];   // outermost inward
+  var ORDER = data.order;   // outermost inward
   var TICK_PATH = "M-1,-5h2v10h-2z";   // vertical bar; CircosJS rotates glyphs by theta, so this points radially
 
   function esc(s) {
@@ -105,6 +107,14 @@
 
   // ---- legend (static, §4/§8: no interactivity in this version)
   var legend = d3.select("#legend");
+  data.genomes.forEach(function (gn) {          // paired map: one arc colour per genome
+    var li = legend.append("li");
+    li.append("svg").attr("width", 16).attr("height", 16)
+      .append("rect").attr("x", 1).attr("y", 5).attr("width", 14).attr("height", 6).attr("rx", 2)
+      .attr("fill", gn.color);
+    li.append("span").text(gn.label);
+    li.append("span").attr("class", "n").text(data.records.filter(function (r) { return r.genome === gn.key; }).length);
+  });
   ORDER.forEach(function (k) {
     var r = rings[k], li = legend.append("li");
     var sw = li.append("svg").attr("width", 16).attr("height", 16)
@@ -119,15 +129,23 @@
     li.append("span").text(r.label);
     li.append("span").attr("class", "n").text(data.meta.counts[k]);
   });
+  if (data.meta.paired) {
+    var li = legend.append("li");
+    li.append("svg").attr("width", 16).attr("height", 16)
+      .append("path").attr("d", "M1,3 C8,3 8,13 15,13 L15,9 C8,9 8,-1 1,-1 Z").attr("transform", "translate(0,2)")
+      .attr("fill", rings.COMPOSITE.color).attr("fill-opacity", 0.45);
+    li.append("span").text("Composite cargo: source \u2192 query");
+    li.append("span").attr("class", "n").text(data.chords.length);
+  }
 
   // ---- circos layout: one arc per query record
   var circos = new Circos({container: "#chart", width: g.size, height: g.size});
   circos.layout(
-    data.records.map(function (r) { return {id: r.id, len: r.len, label: r.name, color: "#d0d7de"}; }),
+    data.records.map(function (r) { return {id: r.id, len: r.len, label: r.name, color: r.color}; }),
     {
       innerRadius: g.layout_inner, outerRadius: g.layout_outer, gap: g.gap, cornerRadius: 2,
       // record names only for multi-record queries (redundant for one closed genome)
-      labels: {display: data.records.length > 1 && data.records.length <= 30, position: "center", size: 11,
+      labels: {display: data.records.length > (data.meta.paired ? 2 : 1) && data.records.length <= 30, position: "center", size: 11,
                color: "#57606a", radialOffset: 58},   // outside the tick labels
       ticks: {display: true, color: "#8c959f", spacing: g.ticks.spacing, labels: true,
               labelSpacing: 10, labelSuffix: g.ticks.suffix, labelDenominator: g.ticks.denominator,
@@ -155,6 +173,65 @@
 
   // AMB: replace the placeholder symbol with a small radial tick (CircosJS has no tick shape)
   d3.selectAll(".ring-AMB path.point").attr("d", TICK_PATH);
+  // ---- composite cargo chords (paired map). Drawn here, not with CircosJS's chord track:
+  // that uses d3.ribbon, which always runs both ends clockwise, so it cannot twist.
+  // Angle convention as CircosJS: theta from 12 o'clock, clockwise; records share
+  // 2*pi minus one gap per record in proportion to length, in data.records order.
+  var span = 2 * Math.PI - data.records.length * g.gap, total = 0, startOf = {};
+  data.records.forEach(function (r, k) { startOf[r.id] = {off: total, k: k}; total += r.len; });
+  function theta(block, pos) {
+    var b = startOf[block];
+    return (b.off + pos) / total * span + b.k * g.gap;
+  }
+  function pt(th, R) { return [R * Math.sin(th), -R * Math.cos(th)]; }
+  // A plain ribbon (d3.ribbon's shape) joins the source's end to the target's start, so
+  // it reads as "same orientation"; a twisted one joins end to end (Circos convention:
+  // twisted = inverted). Arcs are traced with d3.path, whose angles start at 3 o'clock.
+  // Each end is drawn at least chord_min_rad wide, centred on its true span: a cargo of
+  // a few kb on a multi-Mb circle is otherwise a hairline whose twist cannot be seen.
+  function widen(a0, a1) {
+    var m = g.chord_min_rad;
+    if (a1 - a0 >= m) return [a0, a1, false];
+    var mid = (a0 + a1) / 2;
+    return [mid - m / 2, mid + m / 2, true];
+  }
+  function ribbon(c) {
+    var R = g.chord_radius, q = Math.PI / 2;
+    var sw = widen(theta(c.src_block, c.ref_lo - 1), theta(c.src_block, c.ref_hi));
+    var tw = widen(theta(c.dst_block, c.query_lo - 1), theta(c.dst_block, c.query_hi));
+    var s0 = sw[0], s1 = sw[1], t0 = tw[0], t1 = tw[1];
+    var p = d3.path(), a = pt(s0, R);
+    p.moveTo(a[0], a[1]);
+    p.arc(0, 0, R, s0 - q, s1 - q, false);
+    var tFirst = c.inverted ? t1 : t0, tLast = c.inverted ? t0 : t1, b = pt(tFirst, R);
+    p.quadraticCurveTo(0, 0, b[0], b[1]);
+    p.arc(0, 0, R, tFirst - q, tLast - q, c.inverted);
+    p.quadraticCurveTo(0, 0, a[0], a[1]);
+    p.closePath();
+    return {d: p.toString(), s: [s0, s1], t: [tFirst, tLast], widened: sw[2] || tw[2]};
+  }
+  if (data.chords.length) {
+    var root = d3.select("#chart svg").select("g");
+    var tipDiv = d3.select("body").append("div").attr("class", "chord-tooltip");
+    var cg = root.insert("g", ":first-child").attr("class", "chords");
+    data.chords.forEach(function (c, i) {
+      var rb = ribbon(c), col = rings.COMPOSITE.color;
+      cg.append("path").attr("class", "chord").attr("d", rb.d)
+        .attr("fill", col).attr("fill-opacity", 0.45).attr("stroke", col)
+        .attr("data-i", i).attr("data-inverted", c.inverted ? "1" : "0").attr("data-widened", rb.widened ? "1" : "0")
+        .attr("data-s", rb.s.join(",")).attr("data-t", rb.t.join(","))
+        .on("mouseover", function (ev) {
+          tipDiv.html('<div class="tip"><table>' + c.tip.map(function (kv) {
+            return "<tr><td>" + esc(kv[0]) + "</td><td>" + esc(kv[1]) + "</td></tr>";
+          }).join("") + "</table>" + (rb.widened
+            ? '<div class="moved">ribbon drawn wider than the cargo so it stays visible</div>' : "") +
+            "</div>").style("display", "block")
+            .style("left", ((ev && ev.pageX) || 0) + 12 + "px").style("top", ((ev && ev.pageY) || 0) + 12 + "px");
+        })
+        .on("mouseout", function () { tipDiv.style("display", "none"); });
+    });
+  }
+
   // test/inspection hooks
   d3.selectAll("path.point").attr("data-i", function (d) { return d.i; })
     .attr("data-ring", function (d) { return d.ring; });
