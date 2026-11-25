@@ -1,0 +1,6 @@
+{
+  "name": "mobster-map-checks",
+  "private": true,
+  "description": "Headless checks of the generated MOBster map (test/test_viz.py). Install: npm install --prefix test/js",
+  "dependencies": { "jsdom": "24.1.3" }
+}
