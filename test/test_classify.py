@@ -175,7 +175,7 @@ def test_reference_position_new_and_amb():
     assert amb["reference_position"] == amb["reference_end"] == ""
 
 
-# ------------------------------------------------------------- flank-pair check (README 10)
+# ------------------------------------------------------------- flank-pair check (CLAUDE.md deviation 10)
 # Construct NEW with a 9 bp TSD at chr:1491 (0-based ref_at_mid), element 1347 bp.
 # Flank records are (side, record); the R flank's record is in its own 500 bp frame.
 

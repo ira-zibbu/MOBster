@@ -401,7 +401,7 @@ def tier_section(tier, title):
                      f"{statistics.median(e[0] for e in errs)}, median end "
                      f"{statistics.median(e[1] for e in errs)}; |err| > {25} on either side: "
                      f"{sum(max(abs(e[0]), abs(e[1])) > 25 for e in errs)}/{len(errs)}")
-        # Partial elements are classified like complete ones (README deviation 9).
+        # Partial elements are classified like complete ones (CLAUDE.md deviation 9).
         part = [r for r in rows if r["element_type"].strip().lower() in ("p", "partial")]
         if part:
             pc = Counter((r["truth_class"], r["call"]) for r in part)

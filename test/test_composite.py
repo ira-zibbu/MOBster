@@ -1,4 +1,4 @@
-"""Composite transposition (classify.find_composites, README deviation 11), real aligner.
+"""Composite transposition (classify.find_composites, CLAUDE.md deviation 11), real aligner.
 
 A unit IS - cargo - revcomp(IS) is inserted as one into a copy of the reference. Each
 copy alone is AMB: one flank sits at the insertion site, the other inside the cargo,

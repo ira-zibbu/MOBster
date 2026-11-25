@@ -45,7 +45,7 @@ Rings, outermost inward:
 |------|----------|-------|
 | Axis | Coordinate ticks with megabase labels | — |
 | 1 | `call == NEW` | Filled circle, strong accent colour |
-| 2 | `call == COMPOSITE` | Filled diamond, second accent colour (addition: README deviation 11) |
+| 2 | `call == COMPOSITE` | Filled diamond, second accent colour (addition: CLAUDE.md deviation 11) |
 | 3 | `call == ANC` | Filled circle, muted neutral colour |
 | 4 | `call == AMB` | Small light-grey tick |
 
@@ -122,7 +122,7 @@ classes in the benchmark.
 - The generator must fail loudly if a query record named in the CSV is absent from the
   FASTA, rather than silently dropping those elements.
 
-## 7b. Paired map (addition, README "Interactive map")
+## 7b. Paired map (addition, CLAUDE.md "Interactive map")
 
 A second page, `mobster_map_paired.html`, written next to the first, with the same
 template, libraries and tooltip rules.

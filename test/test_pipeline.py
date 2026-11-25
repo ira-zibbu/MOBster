@@ -76,7 +76,7 @@ def check(rows, expect, tsd, refspan):
     for name, gap in tsd.items():
         assert rows[name]["midpoint_gap"] == gap
         assert rows[name]["tsd_estimate"] == -gap
-    # Partial elements are classified like complete ones (README deviation 9).
+    # Partial elements are classified like complete ones (CLAUDE.md deviation 9).
     assert rows["IS_Q"]["midpoint_gap"] == 768 and rows["IS_Q"]["anc_residual"] == 0
     assert rows["IS_T"]["midpoint_gap"] == ""
     # reference_position/reference_end: the ancestral copy's span in the reference ...

@@ -48,6 +48,6 @@ def test_construct_excises_element_exactly():
     assert build_construct(el, seq, delta=5) == "AAAAACCCCC"
     assert precheck(el, {"r": seq}, delta=5) is None
     assert precheck(el, {"r": seq}, delta=6) == C.AMB_FLANK_TRUNCATED
-    # Partial elements are callable (README deviation 9); truncation still applies.
+    # Partial elements are callable (CLAUDE.md deviation 9); truncation still applies.
     assert precheck(Element(0, "r", "IS", 6, 10, "p"), {"r": seq}, delta=5) is None
     assert precheck(Element(0, "r", "IS", 6, 10, "p"), {"r": seq}, delta=6) == C.AMB_FLANK_TRUNCATED
