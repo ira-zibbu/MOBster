@@ -1,274 +1,127 @@
 # MOBster
 
-Detect transposition of mobile genetic elements (IS elements) in bacterial genomes.
-Implements `docs/instructions.md` (v0.1).
+Detect transpositions of IS elements between two bacterial genomes. Given a
+**reference** and a **query** assembly, MOBster labels every IS element in the query
+as ancestral (already present in the reference), new (inserted since), or ambiguous.
 
-For each IS element in a **query** genome, MOBster builds a construct (left flank +
-right flank, with the element excised), aligns it to the **reference**, and reads the
-signed indel at the construct midpoint:
-
-| `midpoint_gap` | meaning | call |
-|---|---|---|
-| ≈ 0 (≤ 25 bp, negative = duplicated TSD) | empty site in the reference | `NEW` |
-| ≈ element length | element present in the reference | `ANC` |
-| anything else / unresolvable | — | `AMB` + reason code |
-
-Two AMB copies of one IS cluster whose *outer* flanks together read as a NEW insertion
-are the two ends of a newly transposed composite unit (IS – cargo – IS) and are called
-`COMPOSITE` (deviation 11).
-
-Swap `--reference` and `--query` to report losses.
-
-## Install
+## Installation
 
 ```bash
-mamba env create -f environment.yml     # ISEScan 1.7.3, minimap2 2.28, pysam, breseq (gdtools)
+git clone https://github.com/ira-zibbu/MOBster.git && cd MOBster
+mamba env create -f environment.yml     # ISEScan 1.7.3, minimap2, pysam, breseq (gdtools)
 mamba activate mobster
 pip install -e .
 ```
-
-## Run
+## Running
 
 ```bash
 mobster --reference R.fasta --query Q.fasta --outdir results/ --threads 8
-# skip ISEScan with precomputed tables (ISEScan CSV/TSV format):
-mobster --reference R.fasta --query Q.fasta --outdir results/ \
-        --is-table-query Q.fasta.csv --is-table-reference R.fasta.csv
-
-# element losses: swap the genomes (ISEScan then annotates R, as the query)
-mobster --reference Q.fasta --query R.fasta --outdir results_losses/
 ```
 
-Outputs in `--outdir`:
+| Option | Explanation |
+|---|---|
+| `--reference` | reference genome FASTA (required) |
+| `--query` | query genome FASTA (required) |
+| `--outdir` | output directory (default `mobster_out`) |
+| `--threads` | threads for ISEScan and minimap2 (default 1) |
+| `--is-table-query` | precomputed ISEScan table for the query; skips ISEScan on it |
+| `--is-table-reference` | precomputed ISEScan table for the reference; skips ISEScan on it |
 
-- `mobster_calls.csv`: one row per query element (spec §6 schema)
-- `mobster_map.html`: interactive circular map of the calls (see below)
-- `mobster_map_paired.html`: the same calls with the reference on one circle (see below)
-- `mobster.log`: full debug log (stderr shows INFO and above; stdout is unused)
-- `work/constructs.fasta`, `work/constructs.sam`: the constructs and their alignments
-- `isescan/query/`, `isescan/reference/`: ISEScan output, for each genome it was run on
-  (the reference table only feeds the paired map)
+**Losses.** MOBster reports elements present in the query, and currently does not predict lost elements.
 
-For NEW calls, `reference_position` is the 1-based reference base aligned to the construct
-midpoint. Because minimap2 left-aligns indels, this is the first duplicated base of the
-TSD, the same convention as a GenomeDiff `MOB` position.
+## Method
 
-## Interactive map
+1. **Annotate.** ISEScan finds IS elements in both genomes. 
+2. **Build constructs.** For each query element, take 500 bp of sequence on each side
+   and join them with the element cut out (a 1,000 bp *construct*).
+3. **Align.** Align all constructs to the reference with minimap2. Separately, align
+   each 500 bp flank on its own. This provides a second source of information.
+4. **Read the gap.** Where the construct aligns across its midpoint (either as a single alignment or split alignment), measure how much
+   reference sequence lies between the two flanks (`midpoint_gap`):
+   - **about 0** → the reference has an empty site; the element is **NEW**. A small
+     negative gap is the target-site duplication (TSD) created by the insertion.
+   - **about the element's length** → the reference has the element at that site;
+     it is **ANC**.
+   - anything else, or no clean alignment → **AMB**, with a code explaining why.
+5. **Confirm with the flanks.** An ANC or NEW call stands only if the separately
+   aligned flanks pair up at exactly one reference site, giving the same answer. When
+   a flank is a repeat (for example, it runs into a neighbouring IS copy), the flank
+   pairs can also rescue a call the construct missed. This also prevents false **NEW** calls if an ancestral element is present inside a repeat region, such that one copy of the repeat is element-free, and one copy has the element. 
+6. **Composite transpositions.** When two copies of the same IS moved together with
+   the DNA between them (IS – cargo – IS), each copy alone looks ambiguous. If the
+   outer flanks of the pair read as one clean insertion, both copies are called
+   **COMPOSITE**, and the cargo's source in the reference is reported.
 
-Every run also writes `mobster_map.html` (spec: `docs/viz_instructions.md`). It's a single
-self-contained file, around 570 KB, with the data and both libraries inlined, so it opens
-offline and can be emailed. One arc per query record, in FASTA order; NEW, ANC and AMB on
-separate rings (plus COMPOSITE, between NEW and ANC), with one fixed colour per ring.
-Hovering a glyph shows its family, cluster, coordinates, status, `midpoint_gap`,
-`anc_residual` and `tsd_estimate`, a COMPOSITE copy's partner and cargo source, and
-marks partial elements. Glyphs too close to
-hover individually are spread slightly along their ring; the tooltip says when a glyph was
-moved and by how much.
+Partial elements (ISEScan type `p`) are also included.
 
-**Paired map** (`mobster_map_paired.html`):
-- Reference records come first, then query records, on one circle, with each genome's
-  arcs in its own colour.
-- Query elements sit on their call rings as above. The reference's own IS elements (from
-  ISEScan on the reference) sit on one unclassified ring, and their tooltip gives only
-  family, cluster and location.
-- Each COMPOSITE unit with a known `source_cargo` gets a ribbon from that reference span
-  to the cargo between its two copies in the query. A ribbon that crosses over itself
-  means the cargo was inserted inverted relative to the reference (the Circos convention).
-- Each ribbon end is drawn at least 0.07 rad (~16 px) wide, centred on the true span.
-  A 14 kb cargo on a 7 Mb circle would otherwise be a hairline whose twist cannot be
-  seen. The tooltip says when a ribbon was widened, and it always gives true coordinates.
-- The ribbons are drawn with D3, not with CircosJS's chord track. That track uses
-  `d3.ribbon`, which always runs both ends clockwise, so it cannot twist.
+## Output
 
-Regenerate from an existing table without re-running the pipeline:
+Files in `--outdir`:
 
-```bash
-python -m MOBster.viz --calls results/mobster_calls.csv --query Q.fasta --reference R.fasta \
-       --is-table-reference results/isescan/reference/R.fasta.csv   # optional: also the paired map
-```
+| File | Contents |
+|---|---|
+| `mobster_calls.csv` | one row per query IS element (described below) |
+| `mobster_map.html` | interactive circular map of the query and its calls |
+| `mobster_map_paired.html` | reference and query on one circle, with ribbons linking composite cargo to its reference source |
+| `mobster.log` | full debug log |
+| `isescan/` | ISEScan output for each genome it was run on |
+| `work/` | constructs, flanks and their alignments (SAM) |
 
-The page bundles D3 7.9.0 (ISC licence) and CircosJS 2.1.0, which is **GPL-2.0**. Licence
-texts are in `src/MOBster/viz/vendor/`.
+The maps are single self-contained HTML files that open offline. Hover over a glyph for
+its details.
 
-## Differences from the spec
+### Calls (`call`)
 
-1. **minimap2 `-r 100,100`** (spec §4.5 says "override nothing"). asm5's chaining
-   bandwidth (`-r 1k,100k`) joins an ancestral construct's two flanks across the
-   element gap. The aligner then cannot pay for the deletion, so it emits one flank
-   only, with no supplementary record. Every ancestral element came out
-   `AMB_NO_MIDPOINT_SPAN`. With a bandwidth below the shortest element, the flanks
-   come back as primary + supplementary (the §4.6 two-record shape). The value is
-   `MM2_CHAIN_BANDWIDTH` in `constants.py`.
-2. **Two-record bracketing uses the midpoint window**: `qe_i ≤ M + w` and
-   `qs_j ≥ M − w`, not strictly `qe_i ≤ M ≤ qs_j`. Otherwise one ancestral element with
-   a few bases of junction micro-homology or boundary error would be ANC as a single
-   record but AMB_COMPLEX as two, which breaks the requirement that both shapes give
-   the same answer.
-3. **New reason code `AMB_LOW_COVERAGE`**: a group spans the midpoint but covers less
-   than `MIN_COVERAGE` of the construct. None of the spec's codes describes this case.
-4. **Secondary records** count toward `n_loci` only if they would qualify as a locus on
-   their own (span the midpoint window and cover ≥ `MIN_COVERAGE`). Counting every
-   secondary hit, including single-flank repeat hits, would make everything
-   `AMB_MULTI_LOCUS`.
-5. No `-v` flag: the flag set is exactly as in §7, and debug output goes to `mobster.log`.
-6. **`insertion_site` is replaced by `reference_position` and `reference_end`**, filled
-   for ANC and NEW calls (empty for AMB):
-   - **ANC**: the 1-based inclusive span of the ancestral copy in the reference, taken
-     from the reference stretch absent from the construct at the junction (the gap
-     between the two records, or the in-window deletion for one record).
-   - **NEW**: `reference_position` is the insertion point (what the spec's
-     `insertion_site` held); `reference_end` is empty.
+| Call | Meaning |
+|---|---|
+| `NEW` | Inserted in the query; the reference has an empty site here. |
+| `ANC` | Ancestral; the reference has a copy at the same site. |
+| `COMPOSITE` | One of the two IS copies flanking a newly transposed composite unit (IS – cargo – IS). |
+| `AMB` | Could not be decided. see `status` for why. |
 
-   The ANC span comes from the separately aligned flanks that confirm the call
-   (deviation 10). It is not taken from the construct's records: where the bases at one
-   end of the copy repeat just past the other end, the aligner extends a construct
-   record through them and trims the span by 1–3 bp, which a separately aligned flank
-   cannot do. In tier 1, all 390 ANC spans are exact (from the construct records: 181).
+### Status (`status`)
 
-   Limit: **annotation error carries over.** The flanks are defined by the query's
-   element boundaries, so a query boundary off by N bp moves the reference span by the
-   same N bp. The span is the query annotation translated into reference coordinates,
-   not an independent boundary estimate. In tier 2, the span offsets equal ISEScan's
-   boundary errors exactly (374/374).
-7. **The reference IS table is used only for display.** As in spec §4.2, both genomes
-   are annotated. `--is-table-reference` skips ISEScan on the reference. The reference
-   table marks the reference's IS elements on the paired map and is not classified.
-   Classification never uses it (§4.3), and losses still come from the swapped run.
-   (Until 2026-11-24 the reference was not annotated at all.)
-8. **Two extra output columns, `element_family` and `element_cluster`**, copied from the
-   ISEScan table's `family` and `cluster` columns. The map's tooltip needs both
-   (`viz_instructions.md` §5), and the §6 schema had only `element_name`.
-9. **Partial elements are classified, not set aside** (spec §4.3 emits them as
-   `AMB_PARTIAL_ELEMENT`, which is no longer produced). The construct excises exactly the
-   annotated span, so ANC/NEW is decided against the partial's own length: a fragment
-   present in the reference gives a gap equal to its length (ANC), and an empty site
-   gives ≈ 0 (NEW). They are identifiable by `element_type` (`p`), and the map's tooltip
-   shows `Type: partial` for them. Where the annotated boundary falls inside a longer
-   copy, a flank contains element sequence and the call ends up AMB through the normal
-   predicates, not as a wrong ANC/NEW.
-   - Tier 2: all 127 partials were classified, with no wrong ANC/NEW. 112 were ANC (all
-     `anc_residual` 0), including 72 fragments with no truth match. 5 were new IS3
-     insertions that ISEScan labels partial, now NEW. The other 10 were AMB. 8 of them
-     are one IS3 copy that ISEScan truncated by 916 bp, which is `AMB_NO_MIDPOINT_SPAN`
-     in every case.
-   - Real data (barcode05): the 168 bp IS3 fragment is now ANC with residual 0.
-10. **Flank-pair check: a second alignment pass and two new reason codes,
-    `AMB_MULTI_PAIRING` and `AMB_FLANK_CONFLICT`.** The construct alignment assumes both
-    flanks are unique in the reference. In IS-dense genomes they often are not, which
-    breaks it in two ways:
-    - **(a) A flank lies inside a neighbouring multi-copy IS.** It matches every copy
-      equally, and minimap2 puts its primary hit at the wrong one. The result is AMB
-      with `NO_MIDPOINT_SPAN`, `COMPLEX`, or `GAP_UNEXPLAINED` (when the wrong copy is
-      downstream on the same strand).
-    - **(b) The reference has a copy of the site without the element.** This can be a
-      paralog of the site, a tandem copy of the element, or a nested same-family
-      insertion. The construct aligns in one piece to the element-free copy, which
-      beats the true split alignment. minimap2 then drops the split alignment, so the
-      result is a false NEW.
+`OK` for every NEW, ANC and COMPOSITE call. For AMB, the `status` indicates why the call was ambiguous:
 
-    So each flank is also aligned on its own (`work/flanks.fasta`, `work/flanks.sam`;
-    minimap2 asm5 with `-N FLANK_MAX_SECONDARY`, i.e. 100). Every (left hit, right hit)
-    pair is listed that is on one record and strand, brackets the midpoint, covers
-    `MIN_COVERAGE`, passes the off-midpoint indel guard, and has a gap within the NEW
-    or ANC tolerance. These *consistent pairs* are counted in the new column
-    `n_flank_pairs`.
-    - **Confirmation:** a construct ANC/NEW stands only if there is exactly one
-      consistent pair, with the same call, on the same record and strand, and with the
-      reference base at the midpoint within `MIDPOINT_WINDOW` (25 bp) of the
-      construct's. Otherwise the call becomes AMB: `AMB_MULTI_PAIRING` for more than
-      one pair, and **`AMB_FLANK_CONFLICT`** for no pair or one that disagrees. A
-      confirmed ANC reports the pair's reference span (see deviation 6).
-    - **Rescue:** a construct AMB of one of the three statuses above is called from the
-      flank pair when there is exactly one consistent pair **and** at least one flank
-      has more than one placement (primary + secondary hits; supplementary pieces
-      don't count). The repeated flank is what explains the construct's miss. A
-      construct AMB with two single-copy flanks keeps its status, and so does a real
-      disruption, which pairs with the same unexplained gap and so has no consistent
-      pair.
+| Status | Meaning |
+|---|---|
+| `AMB_FLANK_TRUNCATED` | The element is within 500 bp of a contig end, so a full flank cannot be taken. |
+| `AMB_NO_LOCUS` | The construct did not align to the reference at all. |
+| `AMB_NO_MIDPOINT_SPAN` | The construct aligned, but no alignment crosses the element site. Typical of a site that was rearranged through an SV like an inversion or duplication, or of a flank that lies inside another repeat. |
+| `AMB_LOW_COVERAGE` | An alignment crosses the site but covers less than 80% of the construct. Indicates that the site is highly diverged in sequence. |
+| `AMB_MULTI_LOCUS` | The construct aligns cleanly at more than one reference site. |
+| `AMB_GAP_UNEXPLAINED` | One clean site, but the gap between the flanks matches neither an empty site nor the element's length (e.g. a different element, or a deletion, at that site). |
+| `AMB_INDEL_OFF_MIDPOINT` | A large indel (> 50 bp) in a flank, away from the element site. |
+| `AMB_COMPLEX` | The alignment is split into pieces that don't simply bracket the site. |
+| `AMB_MULTI_PAIRING` | The construct gave ANC/NEW, but the separately aligned flanks pair up at more than one reference site. |
+| `AMB_FLANK_CONFLICT` | The construct gave ANC/NEW, but the separately aligned flanks don't agree (no pair, or a pair with another answer or site). |
 
-    Results:
-    - Before the change, every ANC and NEW call that was correct had exactly one
-      consistent pair at the same site: 870 ANC and 58 NEW across the benchmark, and
-      all 16 real NEWs in barcode05. So confirmation removed no correct call.
-    - Tier 1: one IS1 copy with an IS-flanked side (`AMB_COMPLEX` in all 7 cases) is
-      now ANC, and nothing else changed.
-    - Tier 2: `anc` went from 45/48 to 48/48 and `anc_background` from 300/320 to
-      320/320; every NEW class is unchanged. The ISAS1 false NEW (gap 25, an R flank
-      smeared into a diverged repeat at the element's own start) in every case,
-      including `unmodified`, is now `AMB_FLANK_CONFLICT`.
-    - Real data (K. sucrofermentans DSM15973 against its ancestor): 11 AMB became ANC
-      (residual 0), and both false NEWs became `AMB_MULTI_PAIRING`. All 11 rescues
-      have a repeated flank.
-    - Not handled: an element where both flanks are repeat sequence, e.g. a
-      same-family IS nested inside another copy. That stays AMB.
+### Columns of `mobster_calls.csv`
 
-11. **Composite transpositions get their own call, `COMPOSITE`** (spec §9 lists
-    composites as a non-goal). When a composite unit (IS – cargo – IS) transposes as
-    one, each IS copy has one flank at the new site and one inside the cargo, whose
-    source lies elsewhere. Each copy alone is therefore AMB, and its status reflects
-    only the geometry. In barcode05 the same unit appears twice. With the cargo
-    reversed, the two pieces land on opposite strands and both copies are
-    `NO_MIDPOINT_SPAN`. With it forward, the first copy's pieces are out of order
-    (`COMPLEX`), and the second copy's bracket the midpoint across 2.9 Mb
-    (`GAP_UNEXPLAINED`). The flanks are unique, so the flank-pair rescue
-    (deviation 10) does not apply.
+Coordinates are 1-based and inclusive.
 
-    After per-element classification (`classify.find_composites`), AMB copies with one
-    of those three statuses are paired within one query record and cluster. There is
-    no cap on the distance between them.
-    - **Unit test:** the first copy's left flank and the second copy's right flank
-      (the unit's outer flanks, already in `work/flanks.sam`) must form **exactly one**
-      consistent flank pair (deviation 10's test) with a NEW gap, taking the whole
-      unit's length as the element length.
-    - **One partner:** a copy that passes with more than one partner is left as it was.
-    - **Rows:** both copies get `call = COMPOSITE`, `status = OK`, and the outer pair's
-      `best_locus`, `midpoint_gap`, `tsd_estimate` and `reference_position` (the
-      unit's insertion site, NEW convention). `anc_residual` is `midpoint_gap` minus
-      the copy's own length, as everywhere else.
-    - **New columns** (empty unless COMPOSITE):
-      - `composite_partner`: the other copy, `name:start-end`.
-      - `n_cargo_sources`: how many reference placements the inner flanks give the
-        cargo. The first copy's right flank must be at the cargo start and the second
-        copy's left flank at its end, on one record and strand, with an implied length
-        within `anc_tolerance` of the cargo's.
-      - `source_cargo`: `ref:start-end`, 1-based, filled only when `n_cargo_sources`
-        is 1. Start is the reference base at the cargo's first base, reading along the
-        query from the first copy to the second, so start > end means the cargo is
-        reverse-complemented. It is empty for novel or rearranged cargo (0) and for
-        multi-copy cargo (> 1).
-
-    The call rests on the outer flanks only, so an unplaceable cargo still gives
-    COMPOSITE.
-
-    Results:
-    - barcode05: the 4 IS4_84 AMBs are COMPOSITE, in two units of the same 13,962 bp
-      cargo, `ADP1-WT:590505-604466`.
-      - 195,877 ↔ 212,374 is inserted at 3,261,201 with the cargo reversed
-        (`ADP1-WT:604466-590505`).
-      - 466,375 ↔ 482,872 is inserted at 3,510,433 with it forward.
-      - Both have the same 2 bp gap as every IS4_84 NEW.
-      - Nothing else changed. The remaining AMBs are an IS21 partial whose flank
-        crosses the reference's linear origin, and a copy at the contig end.
-    - Tier 1 and tier 2 are unchanged, with no COMPOSITE (none are simulated). The four
-      DSM15973 samples are unchanged.
-
-    Not handled:
-    - a unit whose copies are not both AMB with one of the three statuses;
-    - copies of different clusters;
-    - cargo shorter than δ (500 bp), which gets no `source_cargo`;
-    - a unit already in the reference (that is an ANC gap, ignored).
-
-## Tests and benchmark
-
-```bash
-npm install --prefix test/js                        # once: jsdom, for the map's browser checks
-pytest                                              # unit + integration (needs minimap2, gdtools)
-python -m benchmark.run_benchmark all --threads 10  # spec §8; tier 2 runs ISEScan (slow)
-```
-
-The benchmark simulates query genomes from the Barrick lab's annotated REL606 GenBank
-(`data/REL606/REL606.barricklab.gbk`). The RefSeq record NC_012967.1 has no IS
-annotation, so gdtools cannot place `MOB`s against it. Results go to
-`benchmark/results/report.md`. The GD → element-coordinate conversion is
-`benchmark/gdcoords.py`, tested against real gdtools in `test/test_gdcoords.py`.
-Note that with `duplication_size 0`, gdtools inserts the element *after* `position`.
+| Column | Description |
+|---|---|
+| `query_record` | Query contig/chromosome |
+| `element_name` | ISEScan element name |
+| `element_family`, `element_cluster` | ISEScan family and cluster |
+| `element_start`, `element_end` | Element position in the query (TSD excluded) |
+| `element_length` | `element_end − element_start + 1` |
+| `element_type` | ISEScan type: `c` complete, `p` partial |
+| `delta` | Flank length used (default: 500) |
+| `call` | `NEW`, `ANC`, `COMPOSITE` or `AMB` (see above) |
+| `status` | `OK`, or the AMB reason (see above) |
+| `n_records` | Number of alignment records for the construct |
+| `n_loci` | Number of reference sites where the construct aligns across the midpoint with enough coverage |
+| `n_flank_pairs` | Number of reference sites where the two separately aligned flanks pair consistently |
+| `best_locus` | Reference site used: `record:start-end:strand` |
+| `construct_coverage` | Fraction of the construct covered at `best_locus` |
+| `identity` | Alignment identity at `best_locus` |
+| `midpoint_gap` | Reference bases between the two flanks. ≈ 0 for NEW (negative = TSD length), ≈ `element_length` for ANC. Given for AMB calls too where an alignment exists. |
+| `anc_residual` | `midpoint_gap − element_length`; ≈ 0 for a clean ANC |
+| `tsd_estimate` | Estimated TSD length (`−midpoint_gap`); NEW and COMPOSITE only |
+| `reference_position` | NEW / COMPOSITE: insertion point in the reference (first base of the TSD). ANC: start of the reference copy. |
+| `reference_end` | ANC only: end of the reference copy |
+| `composite_partner` | COMPOSITE only: the other IS copy of the unit, `record:start-end` |
+| `n_cargo_sources` | COMPOSITE only: number of places in the reference the cargo maps to |
+| `source_cargo` | COMPOSITE only, when the cargo maps to exactly one place: its reference span `record:start-end`. Start > end means the cargo is inverted relative to the reference. |
