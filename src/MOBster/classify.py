@@ -364,6 +364,121 @@ def classify_construct(alns: list[pysam.AlignedSegment], element_length: int,
     return out
 
 
+# --------------------------------------------------------------------------- composites
+#
+# A newly transposed composite (IS - cargo - IS, inserted as one unit) presents each IS
+# copy with one flank at the insertion site and one inside the cargo, whose source lies
+# elsewhere. Each copy alone is therefore AMB (NO_MIDPOINT_SPAN, COMPLEX or
+# GAP_UNEXPLAINED, depending on the cargo's orientation and where its source lies). The
+# unit is found by pairing the OUTER flanks of two same-cluster copies: the first copy's
+# left flank and the second copy's right flank must read as a clean NEW insertion of the
+# whole span. The INNER flanks (first copy's right, second copy's left) are the cargo's
+# two ends and give its source in the reference.
+
+
+def outer_pair(left_hits: list[pysam.AlignedSegment], right_hits: list[pysam.AlignedSegment],
+               unit_length: int) -> GroupResult | None:
+    """The single NEW-consistent pairing of an IS-cargo-IS unit's outer flanks, else None.
+
+    left_hits: alignments of the first copy's left flank; right_hits: of the second
+    copy's right flank. Uses the flank-pair test with the unit's length as the element
+    length, and, as the flank-pair check does, requires exactly one consistent pair.
+    """
+    Lc, M = 2 * C.DELTA, C.DELTA
+    pairs = flank_pairs([("L", a) for a in left_hits] + [("R", a) for a in right_hits],
+                        unit_length, Lc, M)
+    new = [g for call, g in pairs if call == "NEW"]
+    return new[0] if len(new) == 1 else None
+
+
+def _flank_ends(a: pysam.AlignedSegment, flank_len: int) -> tuple[int, int]:
+    """0-based reference positions of the stored sequence's first and last base,
+    extrapolated over clips. Stored order ascends with the reference on both strands."""
+    cig = a.cigartuples or []
+    lead = cig[0][1] if cig and cig[0][0] == _HARD_CLIP else 0
+    qs, qe = lead + a.query_alignment_start, lead + a.query_alignment_end
+    return a.reference_start - qs, a.reference_end - 1 + (flank_len - qe)
+
+
+def cargo_sources(start_hits: list[pysam.AlignedSegment], end_hits: list[pysam.AlignedSegment],
+                  cargo_len: int, flank_len: int = C.DELTA) -> list[tuple[str, int, int]]:
+    """Reference placements of a composite's cargo: [(ref, first, last)], 1-based.
+
+    start_hits: alignments of the first 'flank_len' cargo bases (the first copy's right
+    flank); end_hits: of the last ones (the second copy's left flank). A placement puts
+    both on one record and strand, in cargo order, with an implied span within
+    anc_tolerance of cargo_len. `first` is the reference base at the cargo's first base
+    in query order, so first > last means the cargo is reverse-complemented.
+    Cargo shorter than a flank has flanks reaching into the IS copies: no placement.
+    """
+    if cargo_len < flank_len:
+        return []
+    tol = C.anc_tolerance(cargo_len)
+    out: set[tuple[str, int, int]] = set()
+    for s in start_hits:
+        for e in end_hits:
+            if s.is_unmapped or e.is_unmapped or s.reference_name != e.reference_name \
+                    or s.is_reverse != e.is_reverse:
+                continue
+            s_lo, s_hi = _flank_ends(s, flank_len)
+            e_lo, e_hi = _flank_ends(e, flank_len)
+            # '+': cargo runs s_lo .. e_hi. '-': stored is reverse-complemented, so the
+            # cargo's first base is s_hi and its last is e_lo.
+            first, last = (s_hi, e_lo) if s.is_reverse else (s_lo, e_hi)
+            if abs(abs(last - first) + 1 - cargo_len) > tol:
+                continue
+            if (last < first) != s.is_reverse:
+                continue
+            out.add((s.reference_name, first + 1, last + 1))
+    return sorted(out)
+
+
+def find_composites(candidates: list, flank_alns: dict[int, list[tuple[str, pysam.AlignedSegment]]]
+                    ) -> dict[int, dict]:
+    """Pair AMB copies into composite units. Returns {element index: row update}.
+
+    candidates: Elements (inputs.Element) eligible for pairing, i.e. AMB with a status in
+    RESCUABLE. Copies pair within one query record and cluster. A unit (i, j), i before j,
+    stands if its outer flanks pair as exactly one clean NEW (outer_pair). A copy found
+    in more than one unit is left as it is.
+    """
+    groups: dict[tuple[str, str], list] = defaultdict(list)
+    for el in candidates:
+        groups[(el.record, el.cluster or el.name)].append(el)
+
+    def hits(el, side):
+        return [a for s, a in flank_alns.get(el.index, []) if s == side]
+
+    units = []
+    for els in groups.values():
+        els = sorted(els, key=lambda el: el.s)
+        for x, i in enumerate(els):
+            for j in els[x + 1:]:
+                if j.s <= i.e:
+                    continue
+                g = outer_pair(hits(i, "L"), hits(j, "R"), j.e - i.s + 1)
+                if g is not None:
+                    units.append((i, j, g))
+
+    n_units = defaultdict(int)
+    for i, j, _ in units:
+        n_units[i.index] += 1
+        n_units[j.index] += 1
+    out: dict[int, dict] = {}
+    for i, j, g in units:
+        if n_units[i.index] != 1 or n_units[j.index] != 1:
+            continue
+        sources = cargo_sources(hits(i, "R"), hits(j, "L"), j.s - i.e - 1)
+        cargo = f"{sources[0][0]}:{sources[0][1]}-{sources[0][2]}" if len(sources) == 1 else ""
+        for el, partner in ((i, j), (j, i)):
+            row = call_from_group(g, el.length)
+            assert row["call"] == "NEW"
+            out[el.index] = dict(row, call=C.COMPOSITE,
+                                 composite_partner=f"{partner.name}:{partner.s}-{partner.e}",
+                                 source_cargo=cargo, n_cargo_sources=len(sources))
+    return out
+
+
 def _classify_records(alns: list[pysam.AlignedSegment], element_length: int,
                       Lc: int, M: int) -> tuple[dict, GroupResult | None]:
     """Classify one construct from all of its alignment records (spec §4.6).

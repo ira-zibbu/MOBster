@@ -83,7 +83,7 @@
   "use strict";
   var data = JSON.parse(document.getElementById("mobster-data").textContent);
   var g = data.geometry, rings = data.rings;
-  var ORDER = ["NEW", "ANC", "AMB"];   // outermost inward
+  var ORDER = ["NEW", "COMPOSITE", "ANC", "AMB"];   // outermost inward
   var TICK_PATH = "M-1,-5h2v10h-2z";   // vertical bar; CircosJS rotates glyphs by theta, so this points radially
 
   function esc(s) {
@@ -111,6 +111,8 @@
       .append("g").attr("transform", "translate(8,8)");
     if (r.shape === "tick") {
       sw.append("path").attr("d", TICK_PATH).attr("fill", r.color);
+    } else if (r.shape === "diamond") {
+      sw.append("path").attr("d", d3.symbol().type(d3.symbolDiamond).size(r.size)()).attr("fill", r.color);
     } else {
       sw.append("circle").attr("r", Math.sqrt(r.size / Math.PI)).attr("fill", r.color);
     }

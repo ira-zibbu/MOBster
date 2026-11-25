@@ -35,10 +35,14 @@ GAP_RAD = 0.04                   # angular gap after each record (CircosJS `gap`
 # glyph centres closer than 2*hover_px on the same ring are nudged apart (§6).
 RINGS = {
     "NEW": dict(radius=312, color="#d1495b", shape="circle", size=56, hover_px=4.5),
-    "ANC": dict(radius=290, color="#6c7a89", shape="circle", size=36, hover_px=3.8),
-    "AMB": dict(radius=268, color="#c4c4c4", shape="tick", size=0, hover_px=3.5),
+    # Composite-unit copies (README deviation 11): also novel, so next to NEW, in a
+    # second accent colour and a different shape so it reads apart from NEW.
+    "COMPOSITE": dict(radius=290, color="#7b5ea7", shape="diamond", size=56, hover_px=4.5),
+    "ANC": dict(radius=268, color="#6c7a89", shape="circle", size=36, hover_px=3.8),
+    "AMB": dict(radius=246, color="#c4c4c4", shape="tick", size=0, hover_px=3.5),
 }
-RING_LABELS = {"NEW": "NEW: novel transposition", "ANC": "ANC: present in reference",
+RING_LABELS = {"NEW": "NEW: novel transposition",
+               "COMPOSITE": "COMPOSITE: copy in a new composite unit", "ANC": "ANC: present in reference",
                "AMB": "AMB: not yet resolved"}
 
 # Tooltip fields (§5), in display order: (CSV column, label).
@@ -48,6 +52,7 @@ TOOLTIP_FIELDS = [
     ("call", "Call"), ("status", "Status"),
     ("midpoint_gap", "midpoint_gap"), ("anc_residual", "anc_residual"),
     ("tsd_estimate", "tsd_estimate"),
+    ("composite_partner", "Partner"), ("source_cargo", "Cargo source"),
 ]
 
 

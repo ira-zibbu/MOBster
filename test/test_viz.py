@@ -49,6 +49,12 @@ def sample_rows():
         row("contig_3", 200, 968, "AMB", "AMB_FLANK_TRUNCATED"),
         row("contig_3", 50_000, 51_342, "ANC", fam="IS4", cluster="IS4_1", midpoint_gap=1343,
             anc_residual=0),
+        row("contig_3", 80_000, 81_342, "COMPOSITE", fam="IS4", cluster="IS4_1", midpoint_gap=2,
+            anc_residual=-1341, tsd_estimate=-2, composite_partner="IS4_1:95001-96342",
+            source_cargo="chrR:604466-590503", n_cargo_sources=1),
+        row("contig_3", 95_001, 96_342, "COMPOSITE", fam="IS4", cluster="IS4_1", midpoint_gap=2,
+            anc_residual=-1340, tsd_estimate=-2, composite_partner="IS4_1:80000-81342",
+            source_cargo="chrR:604466-590503", n_cargo_sources=1),
     ]
 
 
@@ -73,7 +79,7 @@ def test_every_row_on_exactly_one_ring():
     rows = sample_rows()
     data = build_map_data(rows, RECORDS, "q.fasta", "r.fasta")
     assert sorted(e["i"] for e in data["elements"]) == list(range(len(rows)))
-    assert data["meta"]["counts"] == {"NEW": 2, "ANC": 3, "AMB": 3}
+    assert data["meta"]["counts"] == {"NEW": 2, "COMPOSITE": 2, "ANC": 3, "AMB": 3}
     assert [r["name"] for r in data["records"]] == list(RECORDS)          # FASTA order
 
 

@@ -13,6 +13,10 @@ signed indel at the construct midpoint:
 | ≈ element length | element present in the reference | `ANC` |
 | anything else / unresolvable | — | `AMB` + reason code |
 
+Two AMB copies of one IS cluster whose *outer* flanks together read as a NEW insertion
+are the two ends of a newly transposed composite unit (IS – cargo – IS) and are called
+`COMPOSITE` (deviation 11).
+
 Swap `--reference` and `--query` to report losses.
 
 ## Install
@@ -52,9 +56,10 @@ TSD, the same convention as a GenomeDiff `MOB` position.
 Every run also writes `mobster_map.html` (spec: `docs/viz_instructions.md`). It's a single
 self-contained file, around 570 KB, with the data and both libraries inlined, so it opens
 offline and can be emailed. One arc per query record, in FASTA order; NEW, ANC and AMB on
-separate rings, with one fixed colour per ring. Hovering a glyph shows its family, cluster,
-coordinates, status, `midpoint_gap`, `anc_residual` and `tsd_estimate`,
-and marks partial elements. Glyphs too close to
+separate rings (plus COMPOSITE, between NEW and ANC), with one fixed colour per ring.
+Hovering a glyph shows its family, cluster, coordinates, status, `midpoint_gap`,
+`anc_residual` and `tsd_estimate`, a COMPOSITE copy's partner and cargo source, and
+marks partial elements. Glyphs too close to
 hover individually are spread slightly along their ring; the tooltip says when a glyph was
 moved and by how much.
 
@@ -177,6 +182,62 @@ texts are in `src/MOBster/viz/vendor/`.
       have a repeated flank.
     - Not handled: an element where both flanks are repeat sequence, e.g. a
       same-family IS nested inside another copy. That stays AMB.
+
+11. **Composite transpositions get their own call, `COMPOSITE`** (spec §9 lists
+    composites as a non-goal). When a composite unit (IS – cargo – IS) transposes as
+    one, each IS copy has one flank at the new site and one inside the cargo, whose
+    source lies elsewhere. Each copy alone is therefore AMB, and its status reflects
+    only the geometry. In barcode05 the same unit appears twice. With the cargo
+    reversed, the two pieces land on opposite strands and both copies are
+    `NO_MIDPOINT_SPAN`. With it forward, the first copy's pieces are out of order
+    (`COMPLEX`), and the second copy's bracket the midpoint across 2.9 Mb
+    (`GAP_UNEXPLAINED`). The flanks are unique, so the flank-pair rescue
+    (deviation 10) does not apply.
+
+    After per-element classification (`classify.find_composites`), AMB copies with one
+    of those three statuses are paired within one query record and cluster. There is
+    no cap on the distance between them.
+    - **Unit test:** the first copy's left flank and the second copy's right flank
+      (the unit's outer flanks, already in `work/flanks.sam`) must form **exactly one**
+      consistent flank pair (deviation 10's test) with a NEW gap, taking the whole
+      unit's length as the element length.
+    - **One partner:** a copy that passes with more than one partner is left as it was.
+    - **Rows:** both copies get `call = COMPOSITE`, `status = OK`, and the outer pair's
+      `best_locus`, `midpoint_gap`, `tsd_estimate` and `reference_position` (the
+      unit's insertion site, NEW convention). `anc_residual` is `midpoint_gap` minus
+      the copy's own length, as everywhere else.
+    - **New columns** (empty unless COMPOSITE):
+      - `composite_partner`: the other copy, `name:start-end`.
+      - `n_cargo_sources`: how many reference placements the inner flanks give the
+        cargo. The first copy's right flank must be at the cargo start and the second
+        copy's left flank at its end, on one record and strand, with an implied length
+        within `anc_tolerance` of the cargo's.
+      - `source_cargo`: `ref:start-end`, 1-based, filled only when `n_cargo_sources`
+        is 1. Start is the reference base at the cargo's first base, reading along the
+        query from the first copy to the second, so start > end means the cargo is
+        reverse-complemented. It is empty for novel or rearranged cargo (0) and for
+        multi-copy cargo (> 1).
+
+    The call rests on the outer flanks only, so an unplaceable cargo still gives
+    COMPOSITE.
+
+    Results:
+    - barcode05: the 4 IS4_84 AMBs are COMPOSITE, in two units of the same 13,962 bp
+      cargo, `ADP1-WT:590505-604466`.
+      - 195,877 ↔ 212,374 is inserted at 3,261,201 with the cargo reversed
+        (`ADP1-WT:604466-590505`).
+      - 466,375 ↔ 482,872 is inserted at 3,510,433 with it forward.
+      - Both have the same 2 bp gap as every IS4_84 NEW.
+      - Nothing else changed. The remaining AMBs are an IS21 partial whose flank
+        crosses the reference's linear origin, and a copy at the contig end.
+    - Tier 1 and tier 2 are unchanged, with no COMPOSITE (none are simulated). The four
+      DSM15973 samples are unchanged.
+
+    Not handled:
+    - a unit whose copies are not both AMB with one of the three statuses;
+    - copies of different clusters;
+    - cargo shorter than δ (500 bp), which gets no `source_cargo`;
+    - a unit already in the reference (that is an ANC gap, ignored).
 
 ## Tests and benchmark
 

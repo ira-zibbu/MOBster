@@ -33,6 +33,12 @@ AMB_COMPLEX = "AMB_COMPLEX"
 AMB_MULTI_PAIRING = "AMB_MULTI_PAIRING"
 AMB_FLANK_CONFLICT = "AMB_FLANK_CONFLICT"
 
+# Call value for an IS copy that is one end of a newly transposed composite unit
+# (IS - cargo - IS inserted as one), found by pairing the outer flanks of two AMB copies
+# (classify.find_composites). An addition: the spec's calls are ANC, NEW and AMB, and it
+# lists composites as a non-goal (§9).
+COMPOSITE = "COMPOSITE"
+
 # Secondary hits kept per separately aligned flank (minimap2 -N).
 FLANK_MAX_SECONDARY = 100
 

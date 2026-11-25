@@ -45,12 +45,13 @@ Rings, outermost inward:
 |------|----------|-------|
 | Axis | Coordinate ticks with megabase labels | — |
 | 1 | `call == NEW` | Filled circle, strong accent colour |
-| 2 | `call == ANC` | Filled circle, muted neutral colour |
-| 3 | `call == AMB` | Small light-grey tick |
+| 2 | `call == COMPOSITE` | Filled diamond, second accent colour (addition: README deviation 11) |
+| 3 | `call == ANC` | Filled circle, muted neutral colour |
+| 4 | `call == AMB` | Small light-grey tick |
 
 Every row of the CSV appears on exactly one ring. Rows whose `status` is
-`AMB_PARTIAL_ELEMENT` or `AMB_FLANK_TRUNCATED` never reached alignment but are still
-`AMB` and still belong on ring 3.
+`AMB_FLANK_TRUNCATED` never reached alignment but are still `AMB` and still belong on
+ring 4.
 
 **Rationale for the encoding, so it is not "simplified" later.** The call is carried by
 radial position rather than glyph shape because small glyph shapes are not reliably
@@ -76,10 +77,11 @@ that family belongs to **filtering** rather than colour — "show me only IS150"
 served by a legend toggle than by a hue the reader has to decode — so that capability
 arrives with the deferred filtering work in §8, not with a palette.
 
-Three colours total: accent for NEW, muted neutral for ANC, light grey for AMB. Choose them
-so NEW is the most visually prominent and AMB the least, matching their epistemic status.
+Four colours total: accent for NEW, a second accent for COMPOSITE, muted neutral for ANC,
+light grey for AMB. Choose them so NEW is the most visually prominent and AMB the least,
+matching their epistemic status.
 
-Render a static legend naming the three rings and their colours. No interactivity on the
+Render a static legend naming the four rings and their colours. No interactivity on the
 legend in this version (§8).
 
 ## 5. Tooltip
@@ -90,6 +92,7 @@ On hover, show:
 - query record and element coordinates (1-based, as in the CSV)
 - `call` and `status`
 - `midpoint_gap`, `anc_residual`, `tsd_estimate`
+- for COMPOSITE: `composite_partner` and `source_cargo`
 
 The evidence fields are not decoration. The reason `status` is a named code rather than a
 flag is so ambiguous calls can be triaged, and the tooltip is where that triage happens —

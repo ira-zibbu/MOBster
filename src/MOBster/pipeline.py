@@ -12,7 +12,7 @@ import pysam
 from . import constants as C
 from .align import run_minimap2
 from .annotate import run_isescan
-from .classify import classify_construct
+from .classify import RESCUABLE, classify_construct, find_composites
 from .constructs import index_from_name, side_from_name, write_constructs
 from .inputs import Element, load_fasta, read_is_table
 from .viz import read_calls, write_map
@@ -23,7 +23,7 @@ COLUMNS = [
     "query_record", "element_name", "element_family", "element_cluster", "element_start", "element_end", "element_length",
     "element_type", "delta", "call", "status", "n_records", "n_loci", "n_flank_pairs", "best_locus",
     "construct_coverage", "identity", "midpoint_gap", "anc_residual", "tsd_estimate",
-    "reference_position", "reference_end",
+    "reference_position", "reference_end", "composite_partner", "source_cargo", "n_cargo_sources",
 ]
 
 
@@ -69,6 +69,13 @@ def classify_elements(elements: list[Element], query: dict[str, str], reference:
             row.update(classify_construct(alignments.get(el.index, []), el.length, Lc, M,
                                           flank_alns.get(el.index, [])))
         rows.append({k: row.get(k, "") for k in COLUMNS})
+
+    # Composite units: pair AMB copies whose outer flanks read as one NEW insertion.
+    by_index = {el.index: row for el, row in zip(elements, rows)}
+    candidates = [el for el in elements if el.index not in skipped
+                  and by_index[el.index]["call"] == "AMB" and by_index[el.index]["status"] in RESCUABLE]
+    for idx, update in find_composites(candidates, flank_alns).items():
+        by_index[idx].update({k: v for k, v in update.items() if k in COLUMNS})
     return rows
 
 
@@ -81,7 +88,7 @@ def write_table(rows: list[dict], path: Path) -> None:
 
 def summarise(rows: list[dict]) -> None:
     calls = Counter(r["call"] for r in rows)
-    logger.info("Calls: %s", ", ".join(f"{k}={calls.get(k, 0)}" for k in ("ANC", "NEW", "AMB")))
+    logger.info("Calls: %s", ", ".join(f"{k}={calls.get(k, 0)}" for k in ("ANC", "NEW", C.COMPOSITE, "AMB")))
     amb = Counter(r["status"] for r in rows if r["call"] == "AMB")
     for status, n in amb.most_common():
         logger.info("  %-24s %d", status, n)
